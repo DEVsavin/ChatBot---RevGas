@@ -13,6 +13,7 @@ comporta normalmente.
 
 from __future__ import annotations
 
+import random
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -66,9 +67,14 @@ class ApiRevGasFalsa:
     vendas: list[dict[str, Any]] = field(default_factory=list)
     # Instantes em que cada requisição chegou (para conferir o limite de 1 req/s).
     requisicoes: list[datetime] = field(default_factory=list)
+    # Operação de cada requisição, na ordem (ex.: para conferir que nada foi gravado).
+    operacoes: list[str] = field(default_factory=list)
     # Quantas buscas de vendas são necessárias até uma venda nova aparecer.
     atraso_de_visibilidade: int = 0
     tamanho_da_pagina: int = 20
+    # Modo "mal comportado": a listagem de vendas ignora os filtros (cliente,
+    # canal, datas) e devolve tudo em ordem embaralhada (semente fixa).
+    ignora_filtros_de_vendas: bool = False
     _roteiro: dict[str, deque] = field(default_factory=lambda: defaultdict(deque))
     _proximo_id: int = 1000
     _buscas_de_vendas: int = 0
@@ -80,9 +86,18 @@ class ApiRevGasFalsa:
             raise ValueError(f"operação desconhecida: {operacao!r}")
         self._roteiro[operacao].extend(saidas)
 
-    def semear_venda(self, corpo: dict[str, Any]) -> dict[str, Any]:
-        """Cria uma venda direto no estado da API falsa (ex.: venda de outro pedido)."""
-        return self._criar_venda(corpo).dados
+    def semear_venda(self, corpo: dict[str, Any], *, criada_em: datetime | None = None) -> dict[str, Any]:
+        """Cria uma venda direto no estado da API falsa (ex.: venda de outro pedido).
+
+        `criada_em` permite semear vendas antigas; sem ele, usa o relógio.
+        """
+        venda = self._criar_venda(corpo).dados
+        if criada_em is not None:
+            for guardada in self.vendas:
+                if guardada["id"] == venda["id"]:
+                    guardada["created_at"] = criada_em.isoformat()
+            venda["created_at"] = criada_em.isoformat()
+        return venda
 
     def vendas_criadas(self) -> list[dict[str, Any]]:
         return list(self.vendas)
@@ -99,7 +114,7 @@ class ApiRevGasFalsa:
         return self._executar("criar_venda", lambda: self._criar_venda(corpo))
 
     def buscar_vendas(
-        self, *, customer_id: int, channel: str, de: date, ate: date, pagina: int
+        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int
     ) -> Resposta:
         return self._executar(
             "buscar_vendas",
@@ -110,6 +125,7 @@ class ApiRevGasFalsa:
 
     def _executar(self, operacao: str, normal) -> Resposta:
         self.requisicoes.append(self.relogio.agora())
+        self.operacoes.append(operacao)
         roteiro = self._roteiro[operacao]
         saida = roteiro.popleft() if roteiro else None
         if saida == TIMEOUT_SEM_CRIAR:
@@ -153,17 +169,22 @@ class ApiRevGasFalsa:
         self.vendas.append(venda)
         return Resposta(201, _publico(venda))
 
-    def _buscar_vendas(self, customer_id: int, channel: str, de: date, ate: date, pagina: int) -> Resposta:
+    def _buscar_vendas(
+        self, customer_id: int, channel: str | None, de: date, ate: date, pagina: int
+    ) -> Resposta:
         self._buscas_de_vendas += 1
         visiveis = [
             _publico(venda)
             for venda in self.vendas
             if venda["_visivel_apos"] < self._buscas_de_vendas
             and venda["customer_id"] == customer_id
-            and venda["channel"] == channel
+            and (channel is None or venda["channel"] == channel)
             and de <= datetime.fromisoformat(venda["created_at"]).date() <= ate
         ]
         visiveis.sort(key=lambda v: v["created_at"], reverse=True)  # mais recentes primeiro
+        if self.ignora_filtros_de_vendas:
+            visiveis = [_publico(v) for v in self.vendas if v["_visivel_apos"] < self._buscas_de_vendas]
+            random.Random(0).shuffle(visiveis)
         inicio = (pagina - 1) * self.tamanho_da_pagina
         fatia = visiveis[inicio : inicio + self.tamanho_da_pagina]
         tem_mais = inicio + self.tamanho_da_pagina < len(visiveis)

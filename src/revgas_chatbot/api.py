@@ -40,8 +40,16 @@ class ApiRevGas(Protocol):
     def criar_venda(self, corpo: dict[str, Any]) -> Resposta: ...
 
     def buscar_vendas(
-        self, *, customer_id: int, channel: str, de: date, ate: date, pagina: int
-    ) -> Resposta: ...
+        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int
+    ) -> Resposta:
+        """Vendas do cliente entre `de` e `ate` (datas).
+
+        `channel=None` não filtra por canal (vendas por WhatsApp, telefone etc.).
+        A doc diz que a lista vem ordenada da mais nova para a mais antiga,
+        mas isso não foi confirmado na prática: quem chama não deve confiar
+        nem na ordem nem nos filtros.
+        """
+        ...
 
 
 class Relogio(Protocol):
