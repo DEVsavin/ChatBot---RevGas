@@ -22,7 +22,7 @@ from decimal import Decimal
 from revgas_chatbot.estados import nome_do_estado
 
 # 55 (Brasil) + DDD (2 dígitos) + número (8 ou 9 dígitos) = 12 ou 13 dígitos.
-TELEFONE = re.compile(r"55\d{10,11}")
+TELEFONE = re.compile(r"55\d{10,11}", re.ASCII)  # só 0-9 ASCII (I1)
 
 DINHEIRO = "MONEY"
 

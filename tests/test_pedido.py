@@ -309,3 +309,10 @@ def test_observacao_com_mais_de_200_caracteres_e_invalida():
     resultado = checar(pedido_valido(observacao="a" * 201))
     assert isinstance(resultado, Invalido)
     assert "observacao" in resultado.campos()
+
+
+def test_telefone_com_digitos_que_nao_sao_ascii_e_invalido():
+    # I1: \d aceitaria "５５８６..." (largura cheia); só 0-9 ASCII vale.
+    resultado = checar(pedido_valido(telefone="55８６９９９９９００００"))  # 55 ASCII + largura cheia
+    assert isinstance(resultado, Invalido)
+    assert "telefone" in resultado.campos()
