@@ -15,13 +15,12 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from revgas_chatbot.api import Resposta, TempoEsgotado
-
-FUSO_TERESINA = timezone(timedelta(hours=-3))
+from revgas_chatbot.fuso import FUSO_TERESINA
 
 # Roteiros especiais de timeout:
 TIMEOUT_SEM_CRIAR = "timeout_sem_criar"  # a requisição se perdeu antes de chegar
