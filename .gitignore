@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Material da disciplina (fica só local)
+*.pptx
+
+# Rascunhos locais
+.scratch/
+
+# Documentação de trabalho (fica só local)
+docs/
