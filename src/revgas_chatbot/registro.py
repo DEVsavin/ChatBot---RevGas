@@ -3,6 +3,10 @@
 `RegistradorDeVendas.registrar(pedido)` é a única porta de entrada: valida
 o pedido, garante o cliente, monta e envia a venda e interpreta o resultado.
 A API é injetada (`ApiRevGas`), então tudo pode ser testado sem rede.
+
+O controle das chamadas (1 req/s, novas tentativas no 409/429) fica na
+`ApiCadenciada`. Para dividir o limite de 1 req/s com outros fluxos, passe
+em `api` a mesma `ApiCadenciada` usada por eles.
 """
 
 from __future__ import annotations
@@ -10,9 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any
 
 from revgas_chatbot.api import ApiRevGas, Relogio, Resposta, TempoEsgotado
+from revgas_chatbot.api_cadenciada import ApiCadenciada
+from revgas_chatbot.atendimento import TransferirAtendente
 from revgas_chatbot.estados import nome_do_estado
 from revgas_chatbot.pedido import ForaDoCatalogo, Invalido, Pedido, Problema, ProdutoCatalogo, validar
 from revgas_chatbot.venda import CANAL, marca, montar_corpo_venda
@@ -33,19 +39,6 @@ class PedidoInvalido:
 
 
 @dataclass(frozen=True)
-class TransferirAtendente:
-    """O chatbot não consegue concluir: passa para um atendente humano.
-
-    `venda_pode_existir` avisa o atendente para procurar a venda pela marca
-    `[chatbot:<pedido_id>]` antes de criar outra.
-    """
-
-    motivo: str
-    pedido_id: str
-    venda_pode_existir: bool = False
-
-
-@dataclass(frozen=True)
 class EmAndamento:
     """O mesmo pedido já está sendo registrado: nada é enviado de novo."""
 
@@ -56,24 +49,10 @@ Resultado = VendaCriada | PedidoInvalido | TransferirAtendente | EmAndamento
 
 _PROCESSANDO = object()
 
-# Novas tentativas além da primeira.
-REPETICOES_409 = 1  # só para 409 de lock
-REPETICOES_429 = 2  # 3 tentativas no total
-
 # Reconciliação depois de timeout no POST /sales.
 TENTATIVAS_DE_RECONCILIACAO = 3
 ESPERA_ENTRE_TENTATIVAS = 3.0  # segundos
 MARGEM_ANTES_DO_ENVIO = timedelta(minutes=5)
-
-# Limite global da API: 1 requisição por segundo.
-INTERVALO_MINIMO = 1.0
-
-
-def _travado(resposta: Resposta) -> bool:
-    """409 de lock no banco da API (o único 409 que vale repetir)."""
-    if resposta.status != 409 or not isinstance(resposta.dados, dict):
-        return False
-    return "lock" in str(resposta.dados.get("message", "")).lower()
 
 
 def _aviso_de_venda(pedido_id: str) -> str:
@@ -146,20 +125,19 @@ class RegistradorDeVendas:
     def __init__(
         self,
         *,
-        api: ApiRevGas,
+        api: ApiRevGas | ApiCadenciada,
         relogio: Relogio,
         catalogo: dict[int, ProdutoCatalogo],
         pagamentos_permitidos: set[str],
         establishment_id: int,
     ) -> None:
-        self._api = api
+        self._api = api if isinstance(api, ApiCadenciada) else ApiCadenciada(api, relogio)
         self._relogio = relogio
         self._catalogo = catalogo
         self._pagamentos_permitidos = pagamentos_permitidos
         self._establishment_id = establishment_id
         # Trava por pedido_id: ausente = NOVO; _PROCESSANDO; ou o Resultado final.
         self._pedidos: dict[str, object] = {}
-        self._ultima_requisicao: datetime | None = None
         # Pedidos cujo POST /sales já saiu (a partir daí a trava nunca se solta).
         self._venda_enviada: set[str] = set()
 
@@ -210,7 +188,7 @@ class RegistradorDeVendas:
             enviado_em = self._relogio.agora()
             self._venda_enviada.add(pedido.pedido_id)
             try:
-                resposta = self._chamar(lambda: self._api.criar_venda(corpo))
+                resposta = self._api.criar_venda(corpo)
             except TempoEsgotado:
                 # O servidor pode ter criado a venda: nunca reenviar às cegas.
                 return self._reconciliar(pedido, customer_id, enviado_em)
@@ -247,10 +225,8 @@ class RegistradorDeVendas:
         limite = enviado_em - MARGEM_ANTES_DO_ENVIO
         pagina = 1
         while True:
-            resposta = self._chamar(
-                lambda: self._api.buscar_vendas(
-                    customer_id=customer_id, channel=CANAL, de=de, ate=ate, pagina=pagina
-                )
+            resposta = self._api.buscar_vendas(
+                customer_id=customer_id, channel=CANAL, de=de, ate=ate, pagina=pagina
             )
             if resposta.status != 200:
                 return None
@@ -272,7 +248,7 @@ class RegistradorDeVendas:
         if clientes:
             return clientes[0]["id"]
         try:
-            resposta = self._chamar(lambda: self._api.cadastrar_cliente(dados_do_cliente(pedido)))
+            resposta = self._api.cadastrar_cliente(dados_do_cliente(pedido))
         except TempoEsgotado:
             # O cadastro pode ter sido feito: buscar de novo em vez de recadastrar.
             clientes = self._buscar_clientes(pedido)
@@ -285,43 +261,12 @@ class RegistradorDeVendas:
 
     def _buscar_clientes(self, pedido: Pedido) -> list[dict]:
         try:
-            resposta = self._chamar(lambda: self._api.buscar_clientes(pedido.telefone))
+            resposta = self._api.buscar_clientes(pedido.telefone)
         except TempoEsgotado:
             raise _Parar(
                 TransferirAtendente("sem resposta da API ao buscar o cliente", pedido.pedido_id)
             ) from None
         return self._exigir_status(resposta, 200, pedido, "buscar o cliente")["data"]
-
-    def _chamar(self, requisicao: Callable[[], Resposta]) -> Resposta:
-        """Faz a requisição com as únicas novas tentativas permitidas.
-
-        409 de lock ("cannot modify object due to lock"): 1 nova tentativa.
-        429 (limite): espera >= 1 s e tenta de novo, até 3 tentativas no
-        total. Nos dois casos o servidor recusou, então nada foi criado e
-        repetir é seguro. Outro 409 (ex.: dado duplicado) não é repetido.
-        """
-        repeticoes_409 = repeticoes_429 = 0
-        while True:
-            self._aguardar_vez()
-            try:
-                resposta = requisicao()
-            finally:
-                self._ultima_requisicao = self._relogio.agora()
-            if _travado(resposta) and repeticoes_409 < REPETICOES_409:
-                repeticoes_409 += 1
-            elif resposta.status == 429 and repeticoes_429 < REPETICOES_429:
-                repeticoes_429 += 1
-            else:
-                return resposta
-            # A próxima tentativa espera >= 1 s por causa de _aguardar_vez.
-
-    def _aguardar_vez(self) -> None:
-        """Garante no máximo 1 requisição por segundo (limite global da API)."""
-        if self._ultima_requisicao is None:
-            return
-        passou = (self._relogio.agora() - self._ultima_requisicao).total_seconds()
-        if passou < INTERVALO_MINIMO:
-            self._relogio.dormir(INTERVALO_MINIMO - passou)
 
     def _exigir_status(self, resposta: Resposta, status: int, pedido: Pedido, etapa: str) -> Any:
         """Devolve os dados se o status for o exigido; senão, para com o resultado certo."""
