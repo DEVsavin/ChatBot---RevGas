@@ -13,12 +13,14 @@ from revgas_chatbot.api import Resposta
 from revgas_chatbot.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_falsa import TIMEOUT_SEM_CRIAR, ApiRevGasFalsa, RelogioFalso
 from revgas_chatbot.conversa import Conversa, Dependencias
+from revgas_chatbot.entrada import normalizar
 from revgas_chatbot.fila import FilaDeAtendimento
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.pedido import ProdutoCatalogo
 from revgas_chatbot.registro import RegistradorDeVendas
 
 TELEFONE = "5500900000001"  # DDD 00: fictício
+SEGURANCA = "ORIENTAÇÕES DE SEGURANÇA (texto de teste)"
 CATALOGO = {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
 PAGAMENTOS = {"PIX", "MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO"}
 MARIA = {
@@ -61,6 +63,7 @@ def dependencias(api, fila):
         fila=fila,
         catalogo=CATALOGO,
         pagamentos=PAGAMENTOS,
+        seguranca=SEGURANCA,
     )
 
 
@@ -298,3 +301,299 @@ def test_cliente_nao_identificado_vai_para_o_atendente(conversa, api, fila, cena
     assert aberta.telefone == TELEFONE
     assert "Maria" not in aberta.resumo + texto(resposta)
     assert api.vendas_criadas() == []
+
+
+# --- C1d: resumo (corrigir, cancelar) e depois de encerrada ---------------------------
+
+ATE_O_RESUMO = ("sim", "1", "2", "sim", "1")  # Maria, 2 botijões, endereço do cadastro, PIX
+
+
+def test_cancelar_no_resumo_descarta_sem_venda_nem_solicitacao(conversa, api, fila):
+    *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "3")
+
+    assert texto(resposta) == "Pedido descartado. Nada foi enviado."
+    assert api.vendas_criadas() == []
+    assert fila.listar_abertas() == []
+
+
+def test_corrigir_mostra_o_menu(conversa):
+    *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "2")
+
+    assert "O que quer corrigir?\n1) produto\n2) endereço\n3) pagamento\n4) nome" in texto(resposta)
+
+
+def test_corrigir_produto_volta_ao_resumo_sem_refazer_o_resto(conversa, api):
+    *_, menu, quantidade, resumo = dialogo(conversa, *ATE_O_RESUMO, "2", "1", "1", "3")
+
+    assert "Quantos?" in texto(quantidade)
+    assert "3x botijão de gás — R$ 330,00" in texto(resumo)
+    assert "Rua Exemplo, 100" in texto(resumo)  # endereço mantido
+    assert "Pagamento: PIX" in texto(resumo)  # pagamento mantido
+    conversa.responder("1")
+    [venda] = api.vendas_criadas()
+    assert len(venda["products"]) == 3
+
+
+def test_corrigir_endereco_pede_campo_a_campo_e_volta_ao_resumo(conversa, api):
+    *_, resumo = dialogo(conversa, *ATE_O_RESUMO, "2", "2", *ENDERECO_DIGITADO)
+
+    assert "Rua Nova, S/N — Bairro Novo, Teresina, Piauí" in texto(resumo)
+    assert "2x botijão de gás" in texto(resumo)
+
+
+def test_corrigir_pagamento_e_nome(conversa, api):
+    dialogo(conversa, *ATE_O_RESUMO, "2", "3", "3")  # cartão de débito
+    *_, resumo = [conversa.responder("2"), conversa.responder("4"), conversa.responder("Maria E. Souza")]
+
+    assert "Pagamento: Cartão de débito" in texto(resumo)
+    assert "Nome: Maria E. Souza" in texto(resumo)
+
+
+def test_corrigir_produto_com_troco_que_ficou_menor_que_o_total_pergunta_o_troco_de_novo(conversa):
+    # 1 botijão (R$ 110), dinheiro com troco para 150; depois corrige para 2 (R$ 220).
+    dialogo(conversa, "sim", "1", "1", "sim", "2", "150")
+    *_, resposta = [conversa.responder("2"), conversa.responder("1"), conversa.responder("1"), conversa.responder("2")]
+
+    assert "Vai precisar de troco?" in texto(resposta)
+
+
+def test_depois_de_encerrada_nada_e_enviado_e_oi_recomeca(conversa, api):
+    *_, registrada, de_novo, oi = dialogo(conversa, *ATE_O_RESUMO, "1", "1", "oi")
+
+    assert texto(de_novo) == "Para um novo pedido, envie oi."
+    assert len(api.vendas_criadas()) == 1
+    assert "Este número é seu: (00) 90000-0001?" in texto(oi)
+    dialogo_continuado = [conversa.responder(m) for m in ("sim", "1", "1", "sim", "1", "1")]
+    assert texto(dialogo_continuado[-1]).startswith("Pedido registrado!")
+    assert len(api.vendas_criadas()) == 2  # rascunho novo = pedido novo
+
+
+# --- C1d: resultados do registrador -----------------------------------------------
+
+
+def _422(campo):
+    return Resposta(422, {"data": [{"field": campo, "message": "texto cru da API"}], "message": "x"})
+
+
+def test_pedido_invalido_leva_ao_campo_e_depois_registra(conversa, api):
+    api.roteirizar("criar_venda", _422("location"))
+    *_, invalido = dialogo(conversa, *ATE_O_RESUMO, "1")
+
+    assert invalido[0] == "Precisamos corrigir: confira a rua do endereço."
+    assert "texto cru da API" not in texto(invalido)
+    assert "Qual é a rua?" in texto(invalido)
+    *_, resumo = [conversa.responder(m) for m in ENDERECO_DIGITADO]
+    assert "Rua Nova" in texto(resumo)
+    confirmacao = conversa.responder("1")
+    assert texto(confirmacao).startswith("Pedido registrado!")
+    assert len(api.vendas_criadas()) == 1
+
+
+def test_pedido_invalido_no_nome_volta_ao_nome(conversa_nova, api):
+    api.roteirizar("cadastrar_cliente", _422("name"))
+    *_, invalido = dialogo(conversa_nova, "sim", "Joana", "1", "1", *ENDERECO_DIGITADO, "1", "1")
+
+    assert invalido[0] == "Precisamos corrigir: confira o seu nome."
+    assert "Qual é o seu nome?" in texto(invalido)
+    resumo = conversa_nova.responder("Joana Teste")
+    assert "Nome: Joana Teste" in texto(resumo)
+
+
+def test_transferencia_do_registrador_vai_para_a_fila_sem_dizer_registrado(conversa, api, fila):
+    api.roteirizar("criar_venda", Resposta(403, {"message": "x"}))
+    *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "1")
+
+    [aberta] = fila.listar_abertas()
+    assert aberta.tipo == "VENDA"
+    assert aberta.protocolo == "ATD-20261111-1"
+    assert aberta.dados["venda_pode_existir"] is False
+    assert texto(resposta) == (
+        "Não consegui concluir seu pedido agora. "
+        "Uma pessoa da nossa equipe vai continuar o atendimento. Protocolo ATD-20261111-1."
+    )
+    assert "registrado" not in texto(resposta).lower()
+
+
+def test_transferencia_com_venda_que_pode_existir_leva_o_aviso_e_a_marca(conversa, api, fila):
+    api.roteirizar("criar_venda", Resposta(500, {"message": "x"}))  # incerto: reconcilia e não acha
+    *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "1")
+
+    [aberta] = fila.listar_abertas()
+    assert aberta.dados["venda_pode_existir"] is True
+    assert aberta.dados["marca"].startswith("[chatbot:")
+    assert "pode existir venda com a marca" in aberta.resumo
+    assert "Pedido registrado" not in texto(resposta)  # RN8: não afirma que registrou
+
+
+def test_confirmacao_repetida_durante_o_registro_responde_em_andamento(conversa, api):
+    respostas_internas = []
+    dialogo(conversa, *ATE_O_RESUMO)
+    api.roteirizar("buscar_clientes", lambda: respostas_internas.append(conversa.responder("1")))
+
+    final = conversa.responder("1")
+
+    assert respostas_internas == [["Seu pedido já está sendo registrado. Aguarde um instante."]]
+    assert texto(final).startswith("Pedido registrado!")
+    assert len(api.vendas_criadas()) == 1
+
+
+NAO_REFACA = "Não faça um novo pedido: nossa equipe vai verificar se ele foi registrado."
+
+
+@pytest.mark.parametrize("falha, avisa", [(Resposta(500, {"message": "x"}), True), (Resposta(403, {"message": "x"}), False)])
+def test_so_avisa_para_nao_refazer_quando_a_venda_pode_existir(conversa, api, falha, avisa):
+    # I2: com venda_pode_existir, o cliente não pode ser levado a pedir de novo.
+    api.roteirizar("criar_venda", falha)
+    *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "1")
+
+    assert (NAO_REFACA in texto(resposta)) is avisa
+
+
+# --- C1e: comandos que valem em qualquer passo ---------------------------------------
+
+
+def quebrar(fila_pasta):
+    """Faz a fila falhar ao gravar: o arquivo da fila vira uma pasta."""
+    (fila_pasta / "fila.jsonl").mkdir()
+
+
+@pytest.mark.parametrize(
+    "antes",
+    [
+        (),  # na confirmação do número
+        ("sim", "1"),  # na quantidade
+        ("não", "(00) 90000-0003", "sim"),  # no nome (texto livre)
+        ATE_O_RESUMO,  # no resumo
+    ],
+)
+def test_vazamento_em_qualquer_passo_orienta_primeiro_e_abre_urgente(conversa, api, fila, antes):
+    *_, resposta = dialogo(conversa, *antes, "estou sentindo cheiro de gás")
+
+    assert resposta[0] == SEGURANCA
+    [aberta] = fila.listar_abertas()
+    assert aberta.tipo == "VAZAMENTO"
+    assert aberta.prioridade == "URGENTE"
+    assert aberta.texto_cliente == "estou sentindo cheiro de gás"
+    assert f"Protocolo {aberta.protocolo}" in texto(resposta[1:])
+    assert api.vendas_criadas() == []
+    assert texto(conversa.responder("1")) == "Para um novo pedido, envie oi."  # encerrada
+
+
+def test_vazamento_com_a_fila_quebrada_orienta_e_nao_inventa_protocolo(conversa, tmp_path):
+    quebrar(tmp_path)
+    _, resposta = dialogo(conversa, "o botijão está vazando")
+
+    assert resposta[0] == SEGURANCA
+    assert "Bombeiros (193)" in texto(resposta[1:])
+    assert "Protocolo" not in texto(resposta)
+
+
+@pytest.mark.parametrize(
+    "antes, mensagem, resumo_esperado",
+    [
+        (("sim",), "quero cancelar", "Cliente quer cancelar ou devolver."),
+        (("sim", "1"), "preciso devolver o botijão", "Cliente quer cancelar ou devolver."),
+        (("sim", "1", "2", "sim"), "quero falar com um atendente", "Cliente pediu atendente."),
+        (("não", "(00) 90000-0003", "sim"), "atendente", "Cliente pediu atendente."),  # nome: mensagem inteira
+    ],
+)
+def test_cancelar_devolver_ou_atendente_transfere_como_atendimento(conversa, api, fila, antes, mensagem, resumo_esperado):
+    *_, resposta = dialogo(conversa, *antes, mensagem)
+
+    [aberta] = fila.listar_abertas()
+    assert aberta.tipo == "ATENDIMENTO"
+    assert resumo_esperado in aberta.resumo
+    assert aberta.texto_cliente == mensagem
+    assert texto(resposta) == (
+        f"Uma pessoa da nossa equipe vai continuar o atendimento. Protocolo {aberta.protocolo}."
+    )
+    assert api.vendas_criadas() == []
+
+
+def test_sair_encerra_sem_enviar_nada(conversa, api, fila):
+    *_, resposta = dialogo(conversa, "sim", "1", "sair")
+
+    assert texto(resposta) == "Tudo bem, até mais!"
+    assert api.vendas_criadas() == [] and fila.listar_abertas() == []
+
+
+def test_quero_cancelar_no_resumo_so_descarta(conversa, api, fila):
+    *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "quero cancelar")
+
+    assert texto(resposta) == "Pedido descartado. Nada foi enviado."
+    assert fila.listar_abertas() == []
+
+
+def test_cancelar_depois_da_venda_leva_o_numero_da_venda(conversa, api, fila):
+    dialogo(conversa, *ATE_O_RESUMO, "1")
+    [venda] = api.vendas_criadas()
+
+    conversa.responder("quero cancelar o pedido")
+
+    [aberta] = fila.listar_abertas()
+    assert aberta.tipo == "ATENDIMENTO"
+    assert aberta.dados == {"venda_id": venda["id"]}
+
+
+def test_palavras_de_comando_dentro_de_respostas_nao_sequestram(conversa_nova, api, fila):
+    respostas = dialogo(
+        conversa_nova, "sim", "Maria Pessoa", "1", "1",
+        "Rua do Atendente, 10", "S/N", "Centro", "Teresina", "PI", "pular", "pular",
+        "vou pagar pessoalmente",
+    )
+
+    assert "Olá, Maria!" in texto(respostas[2])
+    assert respostas[-1][0] == "Escolha um número da lista."  # 'pessoalmente' não é comando
+    assert fila.listar_abertas() == []
+    resumo = [conversa_nova.responder("1")]
+    assert "Rua do Atendente, 10, S/N" in texto(resumo[0])
+
+
+# --- C1e: fila quebrada ---------------------------------------------------------------
+
+TENTE_DE_NOVO = (
+    "Não consegui registrar sua solicitação agora. "
+    "Tente de novo em alguns minutos ou ligue para a revenda."
+)
+
+
+@pytest.mark.parametrize(
+    "preparar, mensagens",
+    [
+        (lambda api: None, ("sim", "quero falar com um atendente")),  # comando
+        (_ambiguo, ("sim",)),  # cliente não identificado
+        (lambda api: api.roteirizar("criar_venda", Resposta(403, {"message": "x"})), (*ATE_O_RESUMO, "1")),
+    ],
+)
+def test_fila_quebrada_numa_transferencia_comum_nao_inventa_protocolo(conversa, api, tmp_path, preparar, mensagens):
+    preparar(api)
+    quebrar(tmp_path)
+    *_, resposta = dialogo(conversa, *mensagens)
+
+    assert texto(resposta) == TENTE_DE_NOVO
+    assert "Protocolo" not in texto(resposta)
+
+
+def test_fila_quebrada_com_venda_que_pode_existir_pede_para_nao_refazer_e_avisa_no_log(conversa, api, tmp_path, caplog):
+    api.roteirizar("criar_venda", Resposta(500, {"message": "x"}))
+    quebrar(tmp_path)
+    with caplog.at_level("ERROR"):
+        *_, resposta = dialogo(conversa, *ATE_O_RESUMO, "1")
+
+    assert NAO_REFACA in texto(resposta)
+    assert "Protocolo" not in texto(resposta)
+    assert "Tente de novo" not in texto(resposta)
+    registros = "\n".join(r.getMessage() for r in caplog.records)
+    assert "[chatbot:" in registros  # a marca para a equipe achar a venda
+    for pessoal in (TELEFONE, "Maria", "Rua Exemplo"):
+        assert pessoal not in registros
+
+
+@pytest.mark.parametrize("forma", ["3", "4"])  # cartão de débito e de crédito
+def test_nunca_pede_dados_do_cartao_senha_ou_codigo(conversa, forma):
+    respostas = dialogo(conversa, "sim", "1", "1", "sim", forma, "1")
+    tudo = normalizar("\n".join(texto(r) for r in respostas))
+
+    for proibido in ("numero do cartao", "validade", "cvv", "senha", "codigo de seguranca", "codigo"):
+        assert proibido not in tudo
+    assert texto(respostas[-1]).startswith("Pedido registrado!")

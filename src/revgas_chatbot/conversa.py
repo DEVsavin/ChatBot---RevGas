@@ -9,6 +9,7 @@ Roteiro fixo, uma pergunta por vez (sem modelo de linguagem no C1).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -16,6 +17,7 @@ from decimal import Decimal
 from revgas_chatbot.api import TempoEsgotado
 from revgas_chatbot.api_cadenciada import ApiCadenciada
 from revgas_chatbot.entrada import (
+    comando,
     normalizar,
     opcao,
     sim_ou_nao,
@@ -26,10 +28,13 @@ from revgas_chatbot.entrada import (
 from revgas_chatbot.estados import nome_do_estado
 from revgas_chatbot.fila import FilaDeAtendimento
 from revgas_chatbot.pedido import Endereco, Item, Pagamento, Pedido, ProdutoCatalogo
-from revgas_chatbot.registro import RegistradorDeVendas, VendaCriada
-from revgas_chatbot.venda import reais
+from revgas_chatbot.atendimento import TransferirAtendente
+from revgas_chatbot.registro import EmAndamento, PedidoInvalido, RegistradorDeVendas, VendaCriada
+from revgas_chatbot.venda import marca, reais
 
 MAX_QUANTIDADE = 10  # C1-D2
+
+_log = logging.getLogger(__name__)
 
 # Rótulos em português, na ordem em que aparecem para o cliente.
 ROTULOS_DE_PAGAMENTO = {
@@ -42,11 +47,24 @@ ROTULOS_DE_PAGAMENTO = {
 
 OPCOES_DO_RESUMO = ["confirmar", "corrigir", "cancelar"]
 
+# Passos em que o cliente digita texto livre: comandos (exceto vazamento)
+# só valem se forem a mensagem inteira (V3).
+PASSOS_DE_TEXTO_LIVRE = frozenset({"NOME", "CAMPO_DO_ENDERECO"})
+
 # Explicações quando a resposta não serve (a pergunta é repetida em seguida).
 SIM_OU_NAO = "Responda sim ou não."
 PERGUNTA_DO_NUMERO = "Qual é o seu número com DDD?"
+O_QUE_CORRIGIR = ["produto", "endereço", "pagamento", "nome"]
+PERGUNTA_DO_QUE_CORRIGIR = "O que quer corrigir?\n" + "\n".join(
+    f"{n}) {item}" for n, item in enumerate(O_QUE_CORRIGIR, 1)
+)
 PERGUNTA_DO_TROCO = "Vai precisar de troco? Responda o valor (ex.: 200) ou 'não'."
 DINHEIRO = "MONEY"
+NAO_REFACA_O_PEDIDO = "Não faça um novo pedido: nossa equipe vai verificar se ele foi registrado."
+TENTE_DE_NOVO = (
+    "Não consegui registrar sua solicitação agora. "
+    "Tente de novo em alguns minutos ou ligue para a revenda."
+)
 DA_LISTA = "Escolha um número da lista."
 
 
@@ -70,13 +88,23 @@ class Dependencias:
     fila: FilaDeAtendimento
     catalogo: dict[int, ProdutoCatalogo]
     pagamentos: set[str]
+    seguranca: str  # orientações para vazamento (config/seguranca.txt)
 
 
 class Conversa:
     def __init__(self, telefone_do_canal: str, dependencias: Dependencias) -> None:
-        self._telefone = telefone_do_canal
+        self._telefone_do_canal = telefone_do_canal
         self._d = dependencias
+        self._ultima_venda_id: int | None = None  # para "quero cancelar" depois da venda
+        self._produtos = list(self._d.catalogo.items())
+        self._formas = [t for t in ROTULOS_DE_PAGAMENTO if t in self._d.pagamentos]
+        self._novo_rascunho()
+
+    def _novo_rascunho(self) -> None:
+        """Estado de um pedido novo. Um rascunho = um pedido_id (a trava do registrador)."""
+        self._telefone = self._telefone_do_canal
         self._passo = "CONFIRMAR_NUMERO"
+        self._corrigindo = False
         self._nome = ""
         self._endereco: Endereco | None = None
         self._endereco_do_cadastro: Endereco | None = None
@@ -85,8 +113,6 @@ class Conversa:
         self._pagamento = ""
         self._troco: Decimal | None = None
         self._pedido_id = str(uuid.uuid4())
-        self._produtos = list(self._d.catalogo.items())
-        self._formas = [t for t in ROTULOS_DE_PAGAMENTO if t in self._d.pagamentos]
 
     # --- interface -------------------------------------------------------------
 
@@ -97,7 +123,27 @@ class Conversa:
         ]
 
     def responder(self, texto: str) -> list[str]:
+        # Vazamento tem prioridade sempre, em qualquer passo (inclusive texto livre).
+        pedido = comando(texto, livre=self._passo in PASSOS_DE_TEXTO_LIVRE)
+        if pedido == "VAZAMENTO":
+            return self._vazamento(texto)
+        # Nos passos de opção, a resposta válida do passo vem antes do comando (V3):
+        # no resumo, "cancelar" é a opção 3.
+        resposta_do_passo = self._passo == "RESUMO" and opcao(texto, OPCOES_DO_RESUMO) is not None
+        if pedido and not resposta_do_passo:
+            return self._comando(pedido, texto)
         return getattr(self, f"_passo_{self._passo.lower()}")(texto)
+
+    def _comando(self, pedido: str, texto: str) -> list[str]:
+        if pedido == "SAIR":
+            self._passo = "ENCERRADA"
+            return ["Tudo bem, até mais!"]
+        if pedido == "CANCELAR_OU_DEVOLVER" and self._passo in ("RESUMO", "CORRIGIR"):
+            self._passo = "ENCERRADA"  # nada foi enviado ainda: só descarta o rascunho
+            return ["Pedido descartado. Nada foi enviado."]
+        motivo = "Cliente quer cancelar ou devolver." if pedido == "CANCELAR_OU_DEVOLVER" else "Cliente pediu atendente."
+        dados = {"venda_id": self._ultima_venda_id} if self._ultima_venda_id is not None else None
+        return self._transferir("", motivo, texto_cliente=texto, dados=dados)
 
     # --- passos ------------------------------------------------------------------
 
@@ -140,6 +186,8 @@ class Conversa:
             return [PERGUNTA_DO_NUMERO]
         # V1: número digitado NÃO busca o cadastro (não revela nome nem endereço
         # de quem é dono do número). O registrador acha o cliente ao registrar.
+        if self._corrigindo:
+            return self._voltar_ao_resumo()
         self._passo = "NOME"
         return ["Qual é o seu nome?"]
 
@@ -148,6 +196,8 @@ class Conversa:
         if not nome:
             return ["Preciso do seu nome para o pedido.", "Qual é o seu nome?"]
         self._nome = nome
+        if self._corrigindo:
+            return self._voltar_ao_resumo()
         self._passo = "PRODUTO"
         return [f"Olá, {nome.split()[0]}!", self._pergunta_produto()]
 
@@ -164,6 +214,11 @@ class Conversa:
         if not quantidade.isdigit() or not 1 <= int(quantidade) <= MAX_QUANTIDADE:
             return [f"Envie um número de 1 a {MAX_QUANTIDADE}.", "Quantos?"]
         self._quantidade = int(quantidade)
+        if self._corrigindo:
+            if self._pagamento == DINHEIRO and self._troco is not None and self._troco < self._total():
+                self._passo = "TROCO"  # o total subiu: o troco informado não serve mais
+                return [PERGUNTA_DO_TROCO]
+            return self._voltar_ao_resumo()
         if self._endereco_do_cadastro is not None:
             self._passo = "ENDERECO_DO_CADASTRO"
             return [self._pergunta_endereco_do_cadastro()]
@@ -199,6 +254,8 @@ class Conversa:
         if len(self._campos) < len(CAMPOS_DO_ENDERECO):
             return [self._pergunta_do_campo()]
         self._endereco = Endereco(**self._campos)
+        if self._corrigindo:
+            return self._voltar_ao_resumo()
         self._passo = "PAGAMENTO"
         return [self._pergunta_pagamento()]
 
@@ -211,8 +268,7 @@ class Conversa:
         if self._pagamento == DINHEIRO:
             self._passo = "TROCO"
             return [PERGUNTA_DO_TROCO]
-        self._passo = "RESUMO"
-        return [self._resumo()]
+        return self._voltar_ao_resumo()
 
     def _passo_troco(self, texto: str) -> list[str]:
         if sim_ou_nao(texto) is False:
@@ -225,16 +281,111 @@ class Conversa:
                     PERGUNTA_DO_TROCO,
                 ]
             self._troco = valor
+        return self._voltar_ao_resumo()
+
+    def _passo_resumo(self, texto: str) -> list[str]:
+        escolha = opcao(texto, OPCOES_DO_RESUMO)
+        if escolha is None:
+            return [DA_LISTA, self._resumo()]
+        if escolha == 1:
+            self._passo = "CORRIGIR"
+            return [PERGUNTA_DO_QUE_CORRIGIR]
+        if escolha == 2:
+            self._passo = "ENCERRADA"
+            return ["Pedido descartado. Nada foi enviado."]
+        resultado = self._d.registrador.registrar(self._pedido())
+        if isinstance(resultado, VendaCriada):
+            self._passo = "ENCERRADA"
+            self._ultima_venda_id = resultado.id
+            # Sem entregador e sem prazo (RN9; a meta de 20 min não é prometida).
+            return [f"Pedido registrado! Número {resultado.id}, total {reais(resultado.total)}."]
+        if isinstance(resultado, EmAndamento):
+            return ["Seu pedido já está sendo registrado. Aguarde um instante."]
+        if isinstance(resultado, PedidoInvalido):
+            return self._corrigir_o_que_a_api_recusou(resultado)
+        return self._transferir_venda(resultado)
+
+    def _corrigir_o_que_a_api_recusou(self, invalido: PedidoInvalido) -> list[str]:
+        """Leva o cliente ao passo do primeiro campo recusado; depois, volta ao resumo."""
+        aviso = "Precisamos corrigir: " + "; ".join(p.mensagem for p in invalido.problemas) + "."
+        campo = invalido.problemas[0].campo
+        self._corrigindo = True
+        if campo.startswith("endereco"):
+            return [aviso, *self._comecar_endereco()[1:]]
+        if campo == "nome":
+            self._passo = "NOME"
+            return [aviso, "Qual é o seu nome?"]
+        if campo == "telefone":
+            self._passo = "DIGITAR_NUMERO"
+            return [aviso, PERGUNTA_DO_NUMERO]
+        # Campo que o cliente não informou (itens, pagamento...): não é com ele.
+        self._corrigindo = False
+        return self._transferir(
+            "Não consegui concluir seu pedido agora.",
+            f"Pedido recusado na validação (campo {campo}).\n{self._resumo_do_pedido()}",
+        )
+
+    def _transferir_venda(self, transferir: TransferirAtendente) -> list[str]:
+        """Registro não concluído: vai para a fila como VENDA. Nunca diz 'registrado' (RN8)."""
+        self._passo = "ENCERRADA"
+        try:
+            protocolo = self._d.fila.abrir(
+                "VENDA",
+                self._telefone,
+                f"Venda não concluída pelo chatbot: {transferir.motivo}\n{self._resumo_do_pedido()}",
+                nome=self._nome or None,
+                dados={
+                    "pedido_id": self._pedido_id,
+                    "venda_pode_existir": transferir.venda_pode_existir,
+                    "marca": marca(self._pedido_id),
+                },
+            )
+        except Exception:  # noqa: BLE001 - nunca inventar protocolo
+            if not transferir.venda_pode_existir:
+                _log.error("não foi possível registrar uma transferência de venda na fila")
+                return [TENTE_DE_NOVO]
+            # V2: a venda pode existir. Não mandar tentar de novo (duplicaria) e deixar
+            # para a equipe um aviso só com o pedido e a marca (sem dado pessoal).
+            _log.error(
+                "EMERGÊNCIA: venda possivelmente criada sem registro na fila; pedido_id=%s marca=%s",
+                self._pedido_id,
+                marca(self._pedido_id),
+            )
+            return ["Não consegui concluir seu pedido agora.", NAO_REFACA_O_PEDIDO]
+        mensagens = [
+            "Não consegui concluir seu pedido agora. "
+            f"Uma pessoa da nossa equipe vai continuar o atendimento. Protocolo {protocolo}."
+        ]
+        if transferir.venda_pode_existir:
+            mensagens.append(NAO_REFACA_O_PEDIDO)  # I2: evita pedido duplicado
+        return mensagens
+
+    def _passo_corrigir(self, texto: str) -> list[str]:
+        escolha = opcao(texto, O_QUE_CORRIGIR)
+        if escolha is None:
+            return [DA_LISTA, PERGUNTA_DO_QUE_CORRIGIR]
+        self._corrigindo = True
+        if escolha == 0:
+            self._passo = "PRODUTO"
+            return [self._pergunta_produto()]
+        if escolha == 1:
+            return self._comecar_endereco()
+        if escolha == 2:
+            self._passo = "PAGAMENTO"
+            return [self._pergunta_pagamento()]
+        self._passo = "NOME"
+        return ["Qual é o seu nome?"]
+
+    def _voltar_ao_resumo(self) -> list[str]:
+        self._corrigindo = False
         self._passo = "RESUMO"
         return [self._resumo()]
 
-    def _passo_resumo(self, texto: str) -> list[str]:
-        if opcao(texto, OPCOES_DO_RESUMO) is None:
-            return [DA_LISTA, self._resumo()]
-        resultado = self._d.registrador.registrar(self._pedido())
-        assert isinstance(resultado, VendaCriada)
-        self._passo = "ENCERRADA"
-        return [f"Pedido registrado! Número {resultado.id}, total {reais(resultado.total)}."]
+    def _passo_encerrada(self, texto: str) -> list[str]:
+        if normalizar(texto) in ("oi", "ola"):
+            self._novo_rascunho()
+            return self.iniciar()
+        return ["Para um novo pedido, envie oi."]
 
     # --- cliente e transferência ---------------------------------------------------
 
@@ -252,14 +403,48 @@ class Conversa:
             return None
         return clientes
 
-    def _transferir(self, aviso_ao_cliente: str, resumo: str) -> list[str]:
-        """Abre a solicitação ATENDIMENTO na fila e encerra a conversa."""
-        protocolo = self._d.fila.abrir("ATENDIMENTO", self._telefone, resumo)
+    def _vazamento(self, texto: str) -> list[str]:
+        """Orientações PRIMEIRO; depois a solicitação urgente. A fila falhar não impede as orientações."""
         self._passo = "ENCERRADA"
+        try:
+            protocolo = self._d.fila.abrir(
+                "VAZAMENTO",
+                self._telefone,
+                "Cliente relatou vazamento ou cheiro de gás.",
+                texto_cliente=texto,
+            )
+        except Exception:  # noqa: BLE001 - qualquer falha: as orientações saem de todo jeito
+            _log.error("não foi possível registrar um vazamento na fila")
+            return [
+                self._d.seguranca,
+                "Não consegui registrar sua solicitação agora. "
+                "Siga as orientações acima e ligue para os Bombeiros (193).",
+            ]
         return [
-            f"{aviso_ao_cliente} Uma pessoa da nossa equipe vai continuar o atendimento. "
-            f"Protocolo {protocolo}."
+            self._d.seguranca,
+            f"Sua solicitação é urgente. Protocolo {protocolo}. "
+            "Uma pessoa da nossa equipe vai entrar em contato.",
         ]
+
+    def _transferir(
+        self,
+        aviso_ao_cliente: str,
+        resumo: str,
+        *,
+        texto_cliente: str | None = None,
+        dados: dict | None = None,
+    ) -> list[str]:
+        """Abre a solicitação ATENDIMENTO na fila e encerra a conversa."""
+        self._passo = "ENCERRADA"
+        try:
+            protocolo = self._d.fila.abrir(
+                "ATENDIMENTO", self._telefone, resumo, texto_cliente=texto_cliente, dados=dados
+            )
+        except Exception:  # noqa: BLE001 - nunca inventar protocolo (devolução §3.7)
+            _log.error("não foi possível registrar uma transferência na fila")
+            return [TENTE_DE_NOVO]
+        aviso = f"{aviso_ao_cliente} " if aviso_ao_cliente else ""
+        return [f"{aviso}Uma pessoa da nossa equipe vai continuar o atendimento. Protocolo {protocolo}."]
 
     # --- textos e montagem -------------------------------------------------------
 
@@ -288,17 +473,20 @@ class Conversa:
         return self._d.catalogo[self._produto_id].preco * self._quantidade
 
     def _resumo(self) -> str:
+        return "\n".join(
+            ["Confira seu pedido:", self._resumo_do_pedido(), "Responda: 1) confirmar  2) corrigir  3) cancelar"]
+        )
+
+    def _resumo_do_pedido(self) -> str:
         produto = self._d.catalogo[self._produto_id]
         e = self._endereco
         return "\n".join(
             [
-                "Confira seu pedido:",
                 f"Nome: {self._nome}",
                 f"Telefone: {telefone_legivel(self._telefone)}",
                 f"{self._quantidade}x {produto.nome} — {reais(self._total())}",
                 f"Entrega: {e.logradouro}, {e.numero} — {e.bairro}, {e.cidade}, {e.estado}",
                 f"Pagamento: {self._descricao_do_pagamento()}",
-                "Responda: 1) confirmar  2) corrigir  3) cancelar",
             ]
         )
 
