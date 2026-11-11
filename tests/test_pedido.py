@@ -282,3 +282,30 @@ def test_fora_do_catalogo_tem_prioridade_sobre_outros_problemas():
     # Sem preço não dá nem para conferir a soma dos pagamentos.
     pedido = pedido_valido(nome="", itens=(Item(product_id=999, quantidade=1),))
     assert isinstance(checar(pedido), ForaDoCatalogo)
+
+
+# --- estado e observação ------------------------------------------------------
+
+
+@pytest.mark.parametrize("estado", ["Piauí", "PI", "pi", "piaui", " PIAUÍ "])
+def test_estado_aceita_sigla_ou_nome(estado):
+    endereco = replace(pedido_valido().endereco, estado=estado)
+    assert isinstance(checar(pedido_valido(endereco=endereco)), Valido)
+
+
+@pytest.mark.parametrize("estado", ["XX", "Piauii", "Teresina"])
+def test_estado_desconhecido_e_invalido(estado):
+    endereco = replace(pedido_valido().endereco, estado=estado)
+    resultado = checar(pedido_valido(endereco=endereco))
+    assert isinstance(resultado, Invalido)
+    assert "endereco.estado" in resultado.campos()
+
+
+def test_observacao_com_ate_200_caracteres_e_valida():
+    assert isinstance(checar(pedido_valido(observacao="a" * 200)), Valido)
+
+
+def test_observacao_com_mais_de_200_caracteres_e_invalida():
+    resultado = checar(pedido_valido(observacao="a" * 201))
+    assert isinstance(resultado, Invalido)
+    assert "observacao" in resultado.campos()

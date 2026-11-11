@@ -19,10 +19,16 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from revgas_chatbot.estados import nome_do_estado
+
 # 55 (Brasil) + DDD (2 dígitos) + número (8 ou 9 dígitos) = 12 ou 13 dígitos.
 TELEFONE = re.compile(r"55\d{10,11}")
 
 DINHEIRO = "MONEY"
+
+# Limite da observação do cliente, para a marca de reconciliação
+# (no fim da observation) não ser cortada se a API truncar o texto.
+MAX_OBSERVACAO = 200
 
 
 @dataclass(frozen=True)
@@ -49,7 +55,7 @@ class Endereco:
     numero: str
     bairro: str
     cidade: str
-    estado: str  # 🟡 nas vendas observadas vem por extenso ("Piauí"), não "PI"
+    estado: str  # sigla ou nome ("PI" ou "Piauí"); a venda usa sempre o nome
     complemento: str | None = None
     referencia: str | None = None
 
@@ -133,6 +139,11 @@ def validar(
         for campo in ("logradouro", "numero", "bairro", "cidade", "estado"):
             if not getattr(pedido.endereco, campo).strip():
                 problema(f"endereco.{campo}", f"informe o campo {campo} do endereço")
+        if pedido.endereco.estado.strip() and nome_do_estado(pedido.endereco.estado) is None:
+            problema("endereco.estado", "estado não reconhecido; use a sigla (PI) ou o nome (Piauí)")
+
+    if pedido.observacao and len(pedido.observacao.strip()) > MAX_OBSERVACAO:
+        problema("observacao", f"a observação pode ter no máximo {MAX_OBSERVACAO} caracteres")
 
     # 4. Itens
     if not pedido.itens:
