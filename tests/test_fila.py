@@ -249,3 +249,9 @@ def test_numeracao_segue_o_maior_numero_e_nao_a_contagem(fila, tmp_path):
         arquivo.write('{"evento": "CONCLUIDA", "protocolo": "DEV-20261111-7"}\n')
 
     assert fila.abrir("CANCELAMENTO", TELEFONE, "a") == "DEV-20261111-8"
+
+
+def test_atendimento_usa_atd_e_e_normal(fila):
+    # C1-D1: transferências da conversa (cancelar, devolver, atendente, cliente não identificado).
+    assert fila.abrir("ATENDIMENTO", TELEFONE, "Cliente pediu atendente.") == "ATD-20261111-1"
+    assert fila.listar_abertas()[0].prioridade == "NORMAL"

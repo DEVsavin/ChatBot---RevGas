@@ -45,6 +45,7 @@ TIPOS = {
     "VAZAMENTO": ("DEV", URGENTE),
     "VENDA": ("ATD", NORMAL),
     "COMPROVANTE_PIX": ("ATD", NORMAL),
+    "ATENDIMENTO": ("ATD", NORMAL),  # transferências da conversa (C1-D1)
 }
 
 # 11 ou mais dígitos, aceitando um espaço, ponto ou traço entre eles
