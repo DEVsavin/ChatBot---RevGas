@@ -13,3 +13,6 @@ __pycache__/
 
 # Documentação de trabalho (fica só local)
 docs/
+
+# Fila de atendimento e comprovantes (dados pessoais, só local)
+dados/
