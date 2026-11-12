@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from revgas_chatbot.api_falsa import RelogioFalso
-from revgas_chatbot.canal_web import criar_app
+from revgas_chatbot.canal_web import criar_app, main
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.interpretacao import Interpretacao, InterpretadorFalso
 from revgas_chatbot.montagem import api_de_demonstracao, montar
@@ -36,7 +36,7 @@ def api():
 @pytest.fixture
 def cliente(tmp_path, api, ia):
     programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia)
-    return TestClient(criar_app(programa, porta=8000), base_url=BASE)
+    return TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
 
 
 def iniciar(cliente, telefone=MARIA):
@@ -172,7 +172,7 @@ class _IaLenta(InterpretadorFalso):
 def test_mensagens_ao_mesmo_tempo_sao_atendidas_uma_de_cada_vez(tmp_path, api):
     ia = _IaLenta()
     programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia)
-    cliente = TestClient(criar_app(programa, porta=8000), base_url=BASE)
+    cliente = TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
     sessoes = [iniciar(cliente)["sessao"] for _ in range(2)]
     for sessao in sessoes:
         enviar(cliente, sessao, "sim")
@@ -195,3 +195,53 @@ def test_trocar_para_numero_real_no_meio_da_conversa_desliga_a_ia(cliente, ia):
     enviar(cliente, sessao, "quero 2 botijões, por favor")
 
     assert ia.recebidos == []
+
+
+# --- W3: página do chat, página da fila e o comando que liga o servidor -----------------
+
+
+def test_pagina_do_chat(cliente):
+    resposta = cliente.get("/")
+
+    assert resposta.status_code == 200
+    assert "text/html" in resposta.headers["content-type"]
+    html = resposta.text
+    assert "textContent" in html  # as mensagens entram como texto
+    assert "innerHTML" not in html  # nunca como HTML
+    for de_fora in ("<script src", "<link", "http://", "https://", "@import"):
+        assert de_fora not in html  # nada carregado de fora: funciona sem internet
+    assert "(00) 90000-0001" in html  # dica dos números de demonstração
+
+
+def test_pagina_da_fila_sem_solicitacoes(cliente):
+    resposta = cliente.get("/fila")
+
+    assert resposta.status_code == 200
+    assert "Nenhuma solicitação aberta" in resposta.text
+
+
+def test_pagina_da_fila_mostra_a_transferencia_feita_pela_web(cliente):
+    sessao = iniciar(cliente)["sessao"]
+    enviar(cliente, sessao, "sim")
+    enviar(cliente, sessao, "quero falar com um atendente")
+
+    assert "ATD-" in cliente.get("/fila").text
+
+
+def test_comando_liga_o_servidor_so_em_127_0_0_1_na_porta_8000(tmp_path):
+    chamadas = []
+    main([], rodar=lambda app, **opcoes: chamadas.append(opcoes), pasta_dados=tmp_path, ambiente={})
+
+    [opcoes] = chamadas
+    assert opcoes["host"] == "127.0.0.1"
+    assert opcoes["port"] == 8000
+    assert opcoes["access_log"] is False  # o caminho tem o identificador da sessão
+
+
+def test_comando_aceita_outra_porta_mas_nunca_outro_endereco(tmp_path):
+    chamadas = []
+    main(["--porta", "8080"], rodar=lambda app, **opcoes: chamadas.append(opcoes), pasta_dados=tmp_path, ambiente={})
+    assert chamadas[0]["host"] == "127.0.0.1" and chamadas[0]["port"] == 8080
+
+    with pytest.raises(SystemExit):
+        main(["--host", "0.0.0.0"], rodar=lambda app, **opcoes: None, pasta_dados=tmp_path, ambiente={})

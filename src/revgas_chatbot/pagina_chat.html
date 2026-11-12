@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat de teste — revenda de gás</title>
+<style>
+  :root { --fundo: #f4f5f7; --cartao: #fff; --texto: #1f2328; --suave: #5b636d; --cliente: #dcf3e3;
+          --chatbot: #fff; --borda: #d0d4da; --destaque: #b45309; --erro: #b00020; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fundo: #15171a; --cartao: #1e2125; --texto: #e6e8eb; --suave: #a0a7b0; --cliente: #1f3b2a;
+            --chatbot: #262a2f; --borda: #3a3f46; --destaque: #f59e0b; --erro: #ff6b81; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: var(--fundo); color: var(--texto); }
+  main { max-width: 42rem; margin: 0 auto; padding: 1rem; display: flex; flex-direction: column; min-height: 100vh; }
+  header h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+  .nota { color: var(--suave); font-size: .9rem; margin: .25rem 0; }
+  .aviso { color: var(--destaque); font-size: .9rem; margin: .5rem 0; }
+  .erro { color: var(--erro); font-size: .9rem; margin: .5rem 0; min-height: 1.2em; }
+  form { display: flex; gap: .5rem; margin: .5rem 0; }
+  input { flex: 1; padding: .6rem .7rem; font-size: 1rem; border: 1px solid var(--borda); border-radius: 8px;
+          background: var(--cartao); color: var(--texto); }
+  button { padding: .6rem 1rem; font-size: 1rem; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+  button:disabled, input:disabled { opacity: .5; cursor: default; }
+  #conversa { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; padding: .5rem 0; }
+  .msg { max-width: 85%; padding: .55rem .75rem; border-radius: 10px; border: 1px solid var(--borda);
+         white-space: pre-wrap; word-wrap: break-word; }
+  .chatbot { align-self: flex-start; background: var(--chatbot); }
+  .cliente { align-self: flex-end; background: var(--cliente); }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Chat de teste — revenda de gás</h1>
+    <p class="nota">Demonstração: use os números fictícios <strong>(00) 90000-0001</strong> (cliente cadastrada)
+      ou <strong>(00) 90000-0002</strong> (sem cadastro). Nenhuma venda vai para o sistema de verdade.</p>
+    <p class="nota"><a href="/fila" target="_blank" rel="noopener">Ver a fila da equipe</a> (abre em outra aba; recarregue para atualizar)</p>
+  </header>
+
+  <form id="inicio">
+    <input id="telefone" placeholder="Telefone de demonstração, ex.: (00) 90000-0001" autocomplete="off" required>
+    <button type="submit">Começar</button>
+  </form>
+
+  <p id="ia" class="nota" hidden></p>
+  <p id="aviso" class="aviso" hidden></p>
+  <div id="conversa" role="log" aria-live="polite"></div>
+  <p id="erro" class="erro" role="alert"></p>
+
+  <form id="envio" hidden>
+    <input id="texto" placeholder="Escreva sua mensagem" autocomplete="off" maxlength="500" required>
+    <button type="submit">Enviar</button>
+  </form>
+</main>
+
+<script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  let sessao = null;
+
+  function mostrar(texto, quem) {
+    const div = document.createElement("div");
+    div.className = "msg " + quem;
+    div.textContent = texto; // sempre texto: nada do que chega vira código
+    $("conversa").appendChild(div);
+    $("conversa").scrollTop = $("conversa").scrollHeight;
+  }
+
+  function mostrarErro(texto) { $("erro").textContent = texto || ""; }
+
+  async function postar(caminho, dados) {
+    const resposta = await fetch(caminho, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados),
+    });
+    const corpo = await resposta.json().catch(() => ({}));
+    if (!resposta.ok) throw new Error(corpo.erro || "Algo deu errado. Tente de novo.");
+    return corpo;
+  }
+
+  $("inicio").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    mostrarErro("");
+    try {
+      const corpo = await postar("/conversas", { telefone: $("telefone").value });
+      sessao = corpo.sessao;
+      $("conversa").replaceChildren();
+      $("ia").textContent = corpo.ia_ligada ? "IA ligada nesta conversa." : "IA desligada nesta conversa.";
+      $("ia").hidden = false;
+      $("aviso").textContent = corpo.aviso || "";
+      $("aviso").hidden = !corpo.aviso;
+      corpo.mensagens.forEach((m) => mostrar(m, "chatbot"));
+      $("envio").hidden = false;
+      $("texto").focus();
+    } catch (falha) {
+      mostrarErro(falha.message);
+    }
+  });
+
+  $("envio").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    const texto = $("texto").value;
+    if (!sessao || !texto.trim()) return;
+    mostrarErro("");
+    mostrar(texto, "cliente");
+    $("texto").value = "";
+    $("texto").disabled = true;
+    try {
+      const corpo = await postar("/conversas/" + encodeURIComponent(sessao) + "/mensagens", { texto });
+      corpo.mensagens.forEach((m) => mostrar(m, "chatbot"));
+    } catch (falha) {
+      mostrarErro(falha.message);
+    } finally {
+      $("texto").disabled = false;
+      $("texto").focus();
+    }
+  });
+</script>
+</body>
+</html>

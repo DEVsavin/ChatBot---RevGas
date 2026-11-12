@@ -16,19 +16,25 @@ mesmo do terminal). Regras do canal (`.scratch/canal/spec.md`):
 
 from __future__ import annotations
 
+import argparse
 import secrets
 import threading
+from pathlib import Path
+from typing import Callable, Mapping
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from revgas_chatbot.conversa import Conversa
 from revgas_chatbot.entrada import numero_ficticio, telefone
-from revgas_chatbot.montagem import Programa
+from revgas_chatbot.montagem import Programa, montar
 
 PORTA = 8000  # W-D1
 MAX_MENSAGEM = 500  # W-D2
+
+HOST = "127.0.0.1"  # só esta máquina; não há opção para mudar (CN-3, CN-4)
+PAGINA_DO_CHAT = (Path(__file__).with_name("pagina_chat.html")).read_text(encoding="utf-8")
 
 AVISO_SEM_IA = (
     "IA desligada para este número: na demonstração, a IA só funciona com os números fictícios."
@@ -47,7 +53,7 @@ def _erro(status: int, mensagem: str) -> JSONResponse:
     return JSONResponse({"erro": mensagem}, status_code=status)
 
 
-def criar_app(programa: Programa, *, porta: int = PORTA) -> FastAPI:
+def criar_app(programa: Programa, *, porta: int = PORTA, pasta_dados: Path = Path("dados")) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)  # sem páginas extras
     hosts_permitidos = {f"127.0.0.1:{porta}", f"localhost:{porta}"}
     cadeado = threading.Lock()  # uma mensagem de cada vez (CN-3)
@@ -62,6 +68,18 @@ def criar_app(programa: Programa, *, porta: int = PORTA) -> FastAPI:
             if tipo != "application/json":
                 return _erro(415, "Envie os dados como JSON.")
         return await proximo(request)
+
+    @app.get("/", response_class=HTMLResponse)
+    def pagina_do_chat():
+        return PAGINA_DO_CHAT
+
+    @app.get("/fila", response_class=HTMLResponse)
+    def pagina_da_fila():
+        # Só local (Host conferido acima). Se um dia for acessível de fora: login (R8).
+        try:
+            return (Path(pasta_dados) / "fila.html").read_text(encoding="utf-8")
+        except OSError:
+            return "<p>Nenhuma solicitação aberta.</p>"
 
     @app.post("/conversas")
     def nova_conversa(corpo: NovaConversa):
@@ -93,3 +111,30 @@ def criar_app(programa: Programa, *, porta: int = PORTA) -> FastAPI:
             return {"mensagens": conversa.responder(corpo.texto)}
 
     return app
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    rodar: Callable[..., None] | None = None,  # testes: um falso no lugar do uvicorn
+    pasta_dados: Path = Path("dados"),
+    ambiente: Mapping[str, str] | None = None,
+) -> None:
+    """Liga o chat web em http://127.0.0.1:<porta> (só nesta máquina)."""
+    parser = argparse.ArgumentParser(description="Chat web de teste (só nesta máquina)")
+    parser.add_argument("--porta", type=int, default=PORTA, help=f"porta (padrão {PORTA})")
+    argumentos = parser.parse_args(argv)
+
+    if rodar is None:
+        import uvicorn
+
+        rodar = uvicorn.run
+    programa = montar(pasta_dados, ambiente=ambiente)
+    app = criar_app(programa, porta=argumentos.porta, pasta_dados=pasta_dados)
+    print(f"Chat de teste em http://{HOST}:{argumentos.porta}  (Ctrl+C para parar)", flush=True)
+    # access_log=False: o caminho das mensagens tem o identificador da sessão.
+    rodar(app, host=HOST, port=argumentos.porta, access_log=False)
+
+
+if __name__ == "__main__":
+    main()

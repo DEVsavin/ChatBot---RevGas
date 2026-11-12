@@ -74,6 +74,20 @@ uv run --env-file .env python -m revgas_chatbot.chat_terminal --telefone 5500900
 - Sem a chave, sem internet ou se a IA não responder em 8 segundos, o chat segue o roteiro normal.
 - Na cota grátis o Google pode usar as mensagens: por isso a IA só funciona com a API de teste e os clientes fictícios. Para clientes reais será preciso um plano pago.
 
+### Chat no navegador
+
+```bash
+uv run python -m revgas_chatbot.canal_web                      # sem IA
+uv run --env-file .env python -m revgas_chatbot.canal_web      # com IA
+```
+
+Abra **http://127.0.0.1:8000**, digite um telefone de demonstração e converse. A fila da equipe fica em **http://127.0.0.1:8000/fila** (recarregue para atualizar).
+
+- Funciona **só nesta máquina** (`127.0.0.1`); outros computadores não acessam.
+- Números fictícios (DDD `00`) são tratados como o número do cliente: a cliente cadastrada é reconhecida e a IA pode ser usada.
+- Qualquer outro número é tratado como digitado: o chatbot pede nome e endereço, não mostra nenhum cadastro e não usa a IA.
+- `--porta 8080` muda a porta, se a 8000 estiver ocupada.
+
 ### Roteiro de demonstração
 
 1. **Pedido completo (cliente cadastrado):** `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar).
