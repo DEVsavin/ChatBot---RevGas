@@ -244,10 +244,20 @@ class Conversa:
         return ["Agora o endereço de entrega.", self._pergunta_do_campo()]
 
     def _passo_campo_do_endereco(self, texto: str) -> list[str]:
-        campo, pergunta, opcional, explicacao = CAMPOS_DO_ENDERECO[len(self._campos)]
+        campo, pergunta, opcional, explicacao = self._campo_atual()
         valor = " ".join(texto.split())
-        if valor and normalizar(valor) != "pular" and self._vazamento_pela_ia(texto):
-            return self._vazamento(texto)
+        if valor and normalizar(valor) != "pular":
+            if campo == "logradouro":
+                # Rua (3.2): UMA consulta à IA serve para vazamento e para o endereço numa frase.
+                interpretado = self._interpretar(texto)
+                if interpretado is not None and interpretado.intencao == "VAZAMENTO":
+                    return self._vazamento(texto)
+                if interpretado is not None and interpretado.campos_do_endereco:
+                    self._campos.update(interpretado.campos_do_endereco)
+                    return self._proximo_campo_ou_fim()
+                # Sem IA ou nada útil (S3): o texto inteiro é a rua, como no C1.
+            elif self._vazamento_pela_ia(texto):
+                return self._vazamento(texto)
         if opcional and normalizar(valor) == "pular":
             valor = None
         elif not valor:
@@ -257,7 +267,14 @@ class Conversa:
             if valor is None:
                 return [explicacao, pergunta]
         self._campos[campo] = valor
-        if len(self._campos) < len(CAMPOS_DO_ENDERECO):
+        return self._proximo_campo_ou_fim()
+
+    def _campo_atual(self) -> tuple[str, str, bool, str]:
+        """O primeiro campo do endereço que ainda não foi respondido."""
+        return next(c for c in CAMPOS_DO_ENDERECO if c[0] not in self._campos)
+
+    def _proximo_campo_ou_fim(self) -> list[str]:
+        if any(c[0] not in self._campos for c in CAMPOS_DO_ENDERECO):
             return [self._pergunta_do_campo()]
         self._endereco = Endereco(**self._campos)
         if self._corrigindo:
@@ -417,6 +434,7 @@ class Conversa:
                 interpretacao,
                 self._d.catalogo,
                 {t: ROTULOS_DE_PAGAMENTO[t] for t in self._formas},
+                texto=texto,  # I5: só vale parte do endereço que o cliente disse
             )
         except Exception:  # noqa: BLE001 - a IA nunca derruba a conversa (C2-3)
             return None
@@ -536,7 +554,7 @@ class Conversa:
     # --- textos e montagem -------------------------------------------------------
 
     def _pergunta_do_campo(self) -> str:
-        return CAMPOS_DO_ENDERECO[len(self._campos)][1]
+        return self._campo_atual()[1]
 
     def _pergunta_numero_digitado(self) -> str:
         return f"É este: {telefone_legivel(self._telefone)}? (sim/não)"

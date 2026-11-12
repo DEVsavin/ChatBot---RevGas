@@ -138,3 +138,42 @@ def test_troco_sem_quantidade_ou_produto_validos_e_descartado(sem):
 @pytest.mark.parametrize("troco", ["muito", "-10", "0", True, None, "250,505"])
 def test_troco_que_nao_e_valor_e_descartado(troco):
     assert validar(**PEDIDO_EM_DINHEIRO, troco=troco).troco is None
+
+
+# --- I5: campo do endereço só vale se o cliente o disse -------------------------------
+
+
+def validar_com_texto(texto, **campos):
+    return validar_interpretacao(Interpretacao(**campos), CATALOGO, FORMAS, texto=texto)
+
+
+def test_cidade_e_estado_inventados_pela_ia_sao_descartados():
+    resultado = validar_com_texto(
+        "Rua Nova, 10, Centro", intencao="PEDIR",
+        endereco={"rua": "Rua Nova", "numero": "10", "bairro": "Centro", "cidade": "Teresina", "estado": "PI"},
+    )
+
+    assert resultado.campos_do_endereco == {"logradouro": "Rua Nova", "numero": "10", "bairro": "Centro"}
+    assert resultado.endereco is None
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["rua nova 10 centro teresina pi", "Rua Nova, 10 - Centro, Teresina-PI", "RUA NOVA 10, CENTRO, TERESINA, PIAUÍ"],
+)
+def test_campos_ditos_valem_sem_diferenciar_maiusculas_acentos_e_pontuacao(texto):
+    resultado = validar_com_texto(texto, intencao="PEDIR", endereco=ENDERECO)
+
+    assert resultado.endereco is not None
+    assert resultado.endereco.estado == "Piauí"
+
+
+def test_numero_so_vale_como_numero_inteiro_no_texto():
+    # "10" não pode casar com "100".
+    resultado = validar_com_texto("Rua Nova 100, Centro", intencao="PEDIR", endereco={"rua": "Rua Nova", "numero": "10"})
+
+    assert "numero" not in resultado.campos_do_endereco
+
+
+def test_sem_texto_a_validacao_continua_como_antes():
+    assert validar(intencao="PEDIR", endereco=ENDERECO).endereco is not None

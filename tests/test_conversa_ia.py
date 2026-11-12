@@ -117,7 +117,7 @@ def test_endereco_incompleto_na_frase_e_ignorado(conversa, ia):
 
 
 def test_dinheiro_sem_troco_na_frase_pergunta_o_troco(conversa, ia):
-    frase = "2 botijões, pago em dinheiro"
+    frase = "2 botijões pra Rua Nova 10, Centro, Teresina-PI, pago em dinheiro"
     ia.respostas[frase] = pedir(produto="botijão de gás", quantidade=2, endereco=ENDERECO_DITO, pagamento="Dinheiro")
     *_, resposta = dialogo(conversa, "sim", frase)
 
@@ -125,7 +125,7 @@ def test_dinheiro_sem_troco_na_frase_pergunta_o_troco(conversa, ia):
 
 
 def test_troco_valido_na_frase_vai_ao_resumo(conversa, ia):
-    frase = "2 botijões, dinheiro, troco pra 250"
+    frase = "2 botijões pra Rua Nova 10, Centro, Teresina-PI, dinheiro, troco pra 250"
     ia.respostas[frase] = pedir(
         produto="botijão de gás", quantidade=2, endereco=ENDERECO_DITO, pagamento="Dinheiro", troco="250"
     )
@@ -229,3 +229,89 @@ def test_corrigir_produto_pela_ia_com_troco_que_ficou_menor_pergunta_o_troco_de_
     assert "Vai precisar de troco?" in texto(resposta)
     resumo = conversa.responder("250")
     assert "troco para R$ 250,00" in texto(resumo)
+
+
+# --- C2c: endereço numa frase (3.2) ---------------------------------------------------
+
+ATE_A_RUA = ("sim", "1", "1", "não")  # Maria recusa o endereço do cadastro → "Qual é a rua?"
+FRASE = "Rua Nova, 10, Centro, Teresina-PI"
+
+
+def test_endereco_numa_frase_pergunta_so_o_que_falta(conversa, api, ia):
+    ia.respostas[FRASE] = Interpretacao(intencao="PEDIR", endereco=ENDERECO_DITO)
+    *_, rua, complemento, referencia = dialogo(conversa, *ATE_A_RUA, FRASE, "pular", "pular")
+
+    assert "Complemento?" in texto(rua)  # rua, número, bairro, cidade e estado já vieram
+    assert "Ponto de referência?" in texto(complemento)
+    assert "Como vai pagar?" in texto(referencia)
+    *_, confirmacao = [conversa.responder("1"), conversa.responder("1")]
+    [venda] = api.vendas_criadas()
+    assert (venda["location"], venda["number"], venda["state_federation"]) == ("Rua Nova", "10", "Piauí")
+
+
+def test_endereco_numa_frase_com_complemento_nao_pergunta_o_complemento(conversa, ia):
+    frase = FRASE + ", casa 2"
+    ia.respostas[frase] = Interpretacao(intencao="PEDIR", endereco={**ENDERECO_DITO, "complemento": "Casa 2"})
+    *_, rua = dialogo(conversa, *ATE_A_RUA, frase)
+
+    assert "Ponto de referência?" in texto(rua)
+
+
+def test_sem_ia_o_texto_inteiro_vira_a_rua(conversa, ia):
+    # S3: a IA devolve None → como no C1.
+    *_, rua = dialogo(conversa, *ATE_A_RUA, FRASE)
+
+    assert "Qual é o número?" in texto(rua)
+    *_, resumo = [conversa.responder(m) for m in ("10", "Centro", "Teresina", "PI", "pular", "pular", "1")]
+    assert f"Entrega: {FRASE}, 10" in texto(resumo)
+
+
+def test_frase_sem_a_rua_preenche_o_que_veio_e_pergunta_a_rua(conversa, ia):
+    ia.respostas["Centro, Teresina"] = Interpretacao(
+        intencao="PEDIR", endereco={"bairro": "Centro", "cidade": "Teresina"}
+    )
+    *_, resposta = dialogo(conversa, *ATE_A_RUA, "Centro, Teresina")
+
+    assert "Qual é a rua?" in texto(resposta)
+    *_, depois_da_rua, depois_do_numero = [conversa.responder("Rua Nova"), conversa.responder("10")]
+    assert "Qual é o estado?" in texto(depois_do_numero)  # bairro e cidade não são perguntados
+
+
+def test_estado_invalido_na_frase_e_perguntado_depois(conversa, ia):
+    ia.respostas[FRASE] = Interpretacao(intencao="PEDIR", endereco={**ENDERECO_DITO, "estado": "XX"})
+    *_, resposta = dialogo(conversa, *ATE_A_RUA, FRASE)
+
+    assert "Qual é o estado?" in texto(resposta)
+
+
+def test_uma_so_chamada_a_ia_por_mensagem_no_campo_da_rua(conversa, ia):
+    ia.respostas[FRASE] = Interpretacao(intencao="PEDIR", endereco=ENDERECO_DITO)
+    dialogo(conversa, *ATE_A_RUA, FRASE)
+
+    assert [t for t, _ in ia.recebidos] == [FRASE]
+
+
+def test_vazamento_dito_no_campo_da_rua(conversa, fila, ia):
+    ia.respostas["acho que tem gás escapando"] = Interpretacao(intencao="VAZAMENTO")
+    *_, resposta = dialogo(conversa, *ATE_A_RUA, "acho que tem gás escapando")
+
+    assert resposta[0] == SEGURANCA
+    assert fila.listar_abertas()[0].tipo == "VAZAMENTO"
+
+
+# --- I5: a IA não pode inventar partes do endereço ---------------------------------------
+
+
+def test_cidade_e_estado_que_o_cliente_nao_disse_sao_perguntados(conversa, ia):
+    ia.respostas["Rua Nova, 10, Centro"] = Interpretacao(intencao="PEDIR", endereco=ENDERECO_DITO)
+    *_, resposta = dialogo(conversa, *ATE_A_RUA, "Rua Nova, 10, Centro")
+
+    assert "Qual é a cidade?" in texto(resposta)
+
+
+def test_endereco_inventado_na_frase_do_produto_e_ignorado(conversa, ia):
+    frase = "2 botijões no pix"
+    ia.respostas[frase] = pedir(produto="botijão de gás", quantidade=2, endereco=ENDERECO_DITO, pagamento="PIX")
+    *_, resposta = dialogo(conversa, "sim", frase)
+
+    assert "Entregar em Rua Exemplo, 100" in texto(resposta)  # pergunta o endereço (o do cadastro)

@@ -8,12 +8,13 @@ A IA nunca registra venda, nunca dá preço e nunca responde ao cliente.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
 
-from revgas_chatbot.entrada import opcao, valor_em_reais
-from revgas_chatbot.estados import nome_do_estado
+from revgas_chatbot.entrada import normalizar, opcao, valor_em_reais
+from revgas_chatbot.estados import NOMES_POR_SIGLA, nome_do_estado
 from revgas_chatbot.pedido import Endereco, ProdutoCatalogo
 
 INTENCOES = frozenset({"PEDIR", "CANCELAR_OU_DEVOLVER", "ATENDENTE", "VAZAMENTO", "SAIR", "OUTRA"})
@@ -66,6 +67,8 @@ def validar_interpretacao(
     interpretacao: Interpretacao,
     catalogo: dict[int, ProdutoCatalogo],
     formas: dict[str, str],  # tipo da API -> rótulo mostrado ao cliente
+    *,
+    texto: str | None = None,  # o que o cliente digitou (para conferir o endereço, I5)
 ) -> PedidoInterpretado:
     produtos = list(catalogo.items())
     indice = opcao(interpretacao.produto, [p.nome for _, p in produtos]) if _texto(interpretacao.produto) else None
@@ -77,6 +80,8 @@ def validar_interpretacao(
 
     quantidade = _quantidade(interpretacao.quantidade)
     campos = _campos_do_endereco(interpretacao.endereco)
+    if texto is not None:
+        campos = {nome: valor for nome, valor in campos.items() if _foi_dito(nome, valor, texto)}
     troco = None
     if pagamento == DINHEIRO and product_id is not None and quantidade is not None:
         # S2: troco só com Dinheiro e para pelo menos o total (preço do CATÁLOGO).
@@ -152,6 +157,29 @@ def _campos_do_endereco(endereco: Any) -> dict[str, str]:
                 continue
         campos[nome] = valor
     return campos
+
+
+def _foi_dito(nome: str, valor: str, texto: str) -> bool:
+    """I5: a IA pode "completar" o endereço com o que o cliente NÃO disse.
+
+    Um campo só vale se aparecer na mensagem como palavra(s) inteira(s),
+    sem diferenciar maiúsculas, acentos e pontuação. O estado vale pela
+    sigla ou pelo nome ("PI" ou "Piauí").
+    """
+    mensagem = _palavras(texto)
+    if nome == "estado":
+        siglas = [s for s, n in NOMES_POR_SIGLA.items() if n == valor]
+        return any(_contem(mensagem, _palavras(v)) for v in [valor, *siglas])
+    return _contem(mensagem, _palavras(valor))
+
+
+def _palavras(texto: str) -> str:
+    """Normalizado e só com letras/números separados por um espaço."""
+    return " ".join(re.findall(r"[a-z0-9/]+", normalizar(texto)))
+
+
+def _contem(mensagem: str, trecho: str) -> bool:
+    return bool(trecho) and re.search(rf"(?<![a-z0-9/]){re.escape(trecho)}(?![a-z0-9/])", mensagem) is not None
 
 
 def _endereco_completo(campos: dict[str, str]) -> Endereco | None:
