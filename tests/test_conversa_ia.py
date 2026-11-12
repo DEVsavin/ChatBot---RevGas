@@ -315,3 +315,32 @@ def test_endereco_inventado_na_frase_do_produto_e_ignorado(conversa, ia):
     *_, resposta = dialogo(conversa, "sim", frase)
 
     assert "Entregar em Rua Exemplo, 100" in texto(resposta)  # pergunta o endereço (o do cadastro)
+
+
+# --- H3: a IA da cota grátis só enquanto o telefone ATUAL for fictício --------------------
+
+
+def test_trocar_para_numero_real_desliga_a_ia(dependencias, ia):
+    from dataclasses import replace
+
+    ia.respostas["quero 2 botijões"] = pedir(produto="botijão de gás", quantidade=2)
+    deps = replace(dependencias, ia_so_com_numero_ficticio=True)
+    conversa = Conversa(TELEFONE, deps)  # começa com número fictício (DDD 00)
+    dialogo(conversa, "não", "(86) 99999-0000", "sim", "Fulano")
+
+    resposta = conversa.responder("quero 2 botijões")
+
+    assert ia.recebidos == []  # nada foi para a IA depois da troca
+    assert resposta[0] == "Escolha um número da lista."  # roteiro do C1
+
+
+def test_numero_ficticio_digitado_mantem_a_ia(dependencias, ia):
+    from dataclasses import replace
+
+    ia.respostas["quero 2 botijões"] = pedir(produto="botijão de gás", quantidade=2)
+    conversa = Conversa(TELEFONE, replace(dependencias, ia_so_com_numero_ficticio=True))
+    dialogo(conversa, "não", "(00) 90000-0005", "sim", "Fulano")
+
+    assert "Quantos?" not in texto(conversa.responder("quero 2 botijões"))
+    # "Fulano" também foi: no passo do nome a IA é consultada só para vazamento (S1).
+    assert [t for t, _ in ia.recebidos] == ["Fulano", "quero 2 botijões"]

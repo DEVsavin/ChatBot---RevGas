@@ -32,6 +32,14 @@ def telefone(texto: str) -> str | None:
     return None
 
 
+DDD_FICTICIO = "00"  # não existe no Brasil: números de demonstração
+
+
+def numero_ficticio(numero: str) -> bool:
+    """Número de demonstração (DDD 00), no formato da API ("5500...")."""
+    return numero[2:4] == DDD_FICTICIO
+
+
 def telefone_legivel(numero: str) -> str:
     """"5586999990000" -> "(86) 99999-0000"; "558633330000" -> "(86) 3333-0000"."""
     ddd, resto = numero[2:4], numero[4:]

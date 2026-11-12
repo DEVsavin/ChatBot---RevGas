@@ -20,6 +20,7 @@ from revgas_chatbot.api_cadenciada import ApiCadenciada
 from revgas_chatbot.entrada import (
     comando,
     normalizar,
+    numero_ficticio,
     opcao,
     sim_ou_nao,
     telefone,
@@ -97,6 +98,8 @@ class Dependencias:
     pagamentos: set[str]
     seguranca: str  # orientações para vazamento (config/seguranca.txt)
     interpretador: Interpretador | None = None  # IA (C2); None = só o roteiro do C1
+    # Cota grátis (H3): a IA só vale enquanto o telefone ATUAL da conversa for fictício.
+    ia_so_com_numero_ficticio: bool = False
 
 
 class Conversa:
@@ -435,6 +438,8 @@ class Conversa:
         """
         if self._d.interpretador is None:
             return None
+        if self._d.ia_so_com_numero_ficticio and not numero_ficticio(self._telefone):
+            return None  # H3: cliente trocou para um número real → nada vai à IA grátis
         contexto = Contexto(
             passo=self._passo,
             produtos=tuple(p.nome for _, p in self._produtos),
