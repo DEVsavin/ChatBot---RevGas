@@ -49,6 +49,27 @@ uv sync
 uv run pytest
 ```
 
+## 🗨️ Chat de teste (terminal)
+
+```bash
+uv run python -m revgas_chatbot.chat_terminal --telefone 5500900000001
+```
+
+- `--telefone` simula o número que o WhatsApp entregaria. Sem ele, o chat pergunta qual usar.
+- Nesta versão o chat usa uma **API de teste** (nenhuma venda vai para o ERP de verdade) com clientes fictícios de DDD `00`:
+  - `5500900000001`: cliente cadastrado (Maria Exemplo, com endereço);
+  - `5500900000002`: cliente sem cadastro.
+- As solicitações para a equipe ficam em `dados/fila.html` (abra no navegador e recarregue com F5). A pasta `dados/` não vai para o git.
+- `Ctrl+D` sai do chat.
+
+### Roteiro de demonstração
+
+1. **Pedido completo (cliente cadastrado):** `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar).
+2. **Cliente novo com correção:** `--telefone 5500900000002` → `sim` → nome → `1` → `1` → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar).
+3. **Transferência para a equipe:** em qualquer momento, envie `quero falar com um atendente` ou `estou sentindo cheiro de gás` e veja a solicitação em `dados/fila.html` (o vazamento aparece como URGENTE, no topo).
+
+> As orientações de segurança para vazamento (`config/seguranca.txt`) são provisórias e ainda serão validadas com a revenda.
+
 ## 👥 Equipe
 
 - Sávio Macêdo
