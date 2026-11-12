@@ -3,7 +3,9 @@ name = "revgas-chatbot"
 version = "0.1.0"
 description = "Chatbot de pedidos de gás integrado à API da RevGás (Projeto de Extensão VI)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "httpx>=0.28.1",
+]
 
 [build-system]
 requires = ["hatchling"]
