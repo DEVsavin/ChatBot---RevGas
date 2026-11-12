@@ -23,7 +23,7 @@ def rodar(argv, digitado, tmp_path):
     relogio = RelogioFalso(datetime(2026, 11, 11, 15, 0, tzinfo=FUSO_TERESINA))
     api = api_de_demonstracao(relogio)  # a mesma API falsa da demo, com os clientes fictícios
     saida = io.StringIO()
-    codigo = main(argv, io.StringIO(digitado), saida, relogio=relogio, api=api, pasta_dados=tmp_path)
+    codigo = main(argv, io.StringIO(digitado), saida, relogio=relogio, api=api, pasta_dados=tmp_path, ambiente={})
     return codigo, saida.getvalue(), api
 
 
@@ -81,4 +81,46 @@ def test_orientacoes_de_seguranca_vazias_ou_sem_193_impedem_a_montagem(tmp_path,
     (config / "seguranca.txt").write_text(conteudo, encoding="utf-8")
 
     with pytest.raises(ValueError, match="seguranca.txt"):
-        montar(tmp_path / "dados", pasta_config=config)
+        montar(tmp_path / "dados", pasta_config=config, ambiente={})
+
+
+# --- C2d: IA na montagem ----------------------------------------------------------------
+
+
+def rodar_com_ambiente(argv, digitado, tmp_path, ambiente):
+    relogio = RelogioFalso(datetime(2026, 11, 11, 15, 0, tzinfo=FUSO_TERESINA))
+    saida = io.StringIO()
+    codigo = main(
+        argv, io.StringIO(digitado), saida,
+        relogio=relogio, api=api_de_demonstracao(relogio), pasta_dados=tmp_path, ambiente=ambiente,
+    )
+    return codigo, saida.getvalue()
+
+
+def test_sem_chave_a_ia_fica_desligada_e_o_chat_funciona(tmp_path):
+    codigo, saida = rodar_com_ambiente(["--telefone", MARIA], "sim\n1\n2\nsim\n1\n1\n", tmp_path, {})
+
+    assert codigo == 0
+    assert "IA desligada" in saida
+    assert "Chatbot: Pedido registrado!" in saida
+
+
+def test_com_chave_o_chat_avisa_que_a_ia_esta_ligada_so_para_clientes_ficticios(tmp_path):
+    codigo, saida = rodar_com_ambiente(["--telefone", MARIA], "sim\n", tmp_path, {"GEMINI_API_KEY": "ficticia"})
+
+    assert codigo == 0
+    assert "IA ligada" in saida
+    assert "ficticia" not in saida  # a chave nunca aparece
+
+
+class _ApiDeVerdade:
+    """Qualquer API que não seja a falsa conta como de verdade."""
+
+
+def test_ia_da_cota_gratis_com_api_de_verdade_nao_inicia(tmp_path):
+    with pytest.raises(ValueError, match="cota grátis"):
+        montar(tmp_path, api=_ApiDeVerdade(), ambiente={"GEMINI_API_KEY": "ficticia"})
+
+
+def test_api_de_verdade_sem_chave_da_ia_inicia_normalmente(tmp_path):
+    montar(tmp_path, api=_ApiDeVerdade(), ambiente={})
