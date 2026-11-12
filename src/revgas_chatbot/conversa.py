@@ -100,8 +100,18 @@ class Dependencias:
 
 
 class Conversa:
-    def __init__(self, telefone_do_canal: str, dependencias: Dependencias) -> None:
+    def __init__(
+        self,
+        telefone_do_canal: str,
+        dependencias: Dependencias,
+        *,
+        numero_confiavel: bool = True,
+    ) -> None:
+        """`numero_confiavel=False`: o número veio de alguém que pode digitar
+        qualquer um (ex.: a página web com número real). A conversa o trata
+        como número digitado (V1): não busca nem revela o cadastro."""
         self._telefone_do_canal = telefone_do_canal
+        self._numero_confiavel = numero_confiavel
         self._d = dependencias
         self._ultima_venda_id: int | None = None  # para "quero cancelar" depois da venda
         self._produtos = list(self._d.catalogo.items())
@@ -163,6 +173,10 @@ class Conversa:
         if resposta is False:
             self._passo = "DIGITAR_NUMERO"
             return [PERGUNTA_DO_NUMERO]
+        if not self._numero_confiavel:
+            # V1: número sem garantia de ser do cliente → não busca o cadastro.
+            self._passo = "NOME"
+            return ["Qual é o seu nome?"]
         clientes = self._buscar_cliente_do_canal()
         if clientes is None or len(clientes) > 1:
             return self._transferir(

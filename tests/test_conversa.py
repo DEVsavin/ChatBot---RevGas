@@ -597,3 +597,29 @@ def test_nunca_pede_dados_do_cartao_senha_ou_codigo(conversa, forma):
     for proibido in ("numero do cartao", "validade", "cvv", "senha", "codigo de seguranca", "codigo"):
         assert proibido not in tudo
     assert texto(respostas[-1]).startswith("Pedido registrado!")
+
+
+# --- W1: número que não é do canal (web, CN-2) ------------------------------------------
+
+
+def test_numero_nao_confiavel_e_tratado_como_digitado(dependencias, api):
+    # V1 na web: um número que não é fictício não pode revelar o cadastro.
+    conversa = Conversa(TELEFONE, dependencias, numero_confiavel=False)
+    respostas = dialogo(conversa, "sim", "Fulano", "1", "1", *ENDERECO_DIGITADO, "1")
+    tudo = "\n".join(texto(r) for r in respostas)
+
+    assert "Qual é o seu nome?" in texto(respostas[1])
+    assert "Maria" not in tudo and "Rua Exemplo" not in tudo
+    assert api.operacoes == []  # nenhuma busca de cliente antes do registro
+    conversa.responder("1")
+    [venda] = api.vendas_criadas()
+    assert venda["customer_id"] == 77  # o registrador acha o cadastro pelo número
+
+
+def test_numero_nao_confiavel_continua_assim_depois_de_oi(dependencias, api):
+    conversa = Conversa(TELEFONE, dependencias, numero_confiavel=False)
+    dialogo(conversa, "sair")
+    conversa.responder("oi")
+
+    assert "Qual é o seu nome?" in texto(conversa.responder("sim"))
+    assert api.operacoes == []
