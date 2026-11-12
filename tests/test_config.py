@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from revgas_chatbot.config import carregar_catalogo, carregar_pagamentos
-from revgas_chatbot.pedido import ProdutoCatalogo
+from revgas_chatbot.vendas.pedido import ProdutoCatalogo
 
 CONFIG = Path(__file__).resolve().parent.parent / "config"
 

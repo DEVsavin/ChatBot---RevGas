@@ -52,7 +52,7 @@ uv run pytest
 ## 🗨️ Chat de teste (terminal)
 
 ```bash
-uv run python -m revgas_chatbot.chat_terminal --telefone 5500900000001
+uv run python -m revgas_chatbot.canais.chat_terminal --telefone 5500900000001
 ```
 
 - `--telefone` simula o número que o WhatsApp entregaria. Sem ele, o chat pergunta qual usar.
@@ -67,7 +67,7 @@ uv run python -m revgas_chatbot.chat_terminal --telefone 5500900000001
 Com a chave do Gemini (cota grátis do [Google AI Studio](https://aistudio.google.com/)) no arquivo `.env` (`GEMINI_API_KEY=...`), o chat entende frases como *"manda 2 botijão pra Rua Nova 10, Centro, Teresina-PI, pago no pix"*:
 
 ```bash
-uv run --env-file .env python -m revgas_chatbot.chat_terminal --telefone 5500900000001
+uv run --env-file .env python -m revgas_chatbot.canais.chat_terminal --telefone 5500900000001
 ```
 
 - A IA só **entende** a mensagem; o chatbot confere tudo (preço do catálogo, endereço que o cliente disse) e o resumo continua obrigatório.
@@ -77,8 +77,8 @@ uv run --env-file .env python -m revgas_chatbot.chat_terminal --telefone 5500900
 ### Chat no navegador
 
 ```bash
-uv run python -m revgas_chatbot.canal_web                      # sem IA
-uv run --env-file .env python -m revgas_chatbot.canal_web      # com IA
+uv run python -m revgas_chatbot.canais.canal_web                      # sem IA
+uv run --env-file .env python -m revgas_chatbot.canais.canal_web      # com IA
 ```
 
 Abra **http://127.0.0.1:8000**, digite um telefone de demonstração e converse. A fila da equipe fica em **http://127.0.0.1:8000/fila** (recarregue para atualizar).

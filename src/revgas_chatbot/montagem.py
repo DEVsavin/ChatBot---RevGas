@@ -15,15 +15,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 
-from revgas_chatbot.api import ApiRevGas, Relogio
-from revgas_chatbot.api_cadenciada import ApiCadenciada
-from revgas_chatbot.api_falsa import ApiRevGasFalsa
+from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio
+from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
+from revgas_chatbot.api_revgas.api_falsa import ApiRevGasFalsa
 from revgas_chatbot.config import carregar_catalogo, carregar_pagamentos
-from revgas_chatbot.conversa import Conversa, Dependencias
-from revgas_chatbot.fila import FilaDeAtendimento
-from revgas_chatbot.interpretacao import Interpretador
-from revgas_chatbot.interpretador_gemini import InterpretadorGemini
-from revgas_chatbot.registro import RegistradorDeVendas
+from revgas_chatbot.conversa.conversa import Conversa, Dependencias
+from revgas_chatbot.atendimento.fila import FilaDeAtendimento
+from revgas_chatbot.ia.interpretacao import Interpretador
+from revgas_chatbot.ia.interpretador_gemini import InterpretadorGemini
+from revgas_chatbot.vendas.registro import RegistradorDeVendas
 from revgas_chatbot.relogio import RelogioDoSistema
 
 PASTA_CONFIG = Path(__file__).resolve().parents[2] / "config"

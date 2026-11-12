@@ -12,7 +12,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from revgas_chatbot.pedido import ProdutoCatalogo, valor_em_reais
+from revgas_chatbot.vendas.pedido import ProdutoCatalogo, valor_em_reais
 
 # Valores de `payment_type` aceitos pela API (doc do POST /sales).
 TIPOS_DE_PAGAMENTO_DA_API = frozenset(
