@@ -4,7 +4,8 @@
 mensagens do chatbot. Quem lê o teclado ou o WhatsApp e mostra as
 mensagens é o canal (ex.: `chat_terminal.py`), não este módulo.
 
-Roteiro fixo, uma pergunta por vez (sem modelo de linguagem no C1).
+Roteiro fixo, uma pergunta por vez. Com um interpretador (C2), a IA é
+consultada só quando o roteiro não entendeu: ela sugere, o código decide.
 """
 
 from __future__ import annotations
@@ -26,7 +27,13 @@ from revgas_chatbot.entrada import (
     valor_em_reais,
 )
 from revgas_chatbot.estados import nome_do_estado
-from revgas_chatbot.fila import FilaDeAtendimento
+from revgas_chatbot.fila import FilaDeAtendimento, mascarar
+from revgas_chatbot.interpretacao import (
+    Contexto,
+    Interpretador,
+    PedidoInterpretado,
+    validar_interpretacao,
+)
 from revgas_chatbot.pedido import Endereco, Item, Pagamento, Pedido, ProdutoCatalogo
 from revgas_chatbot.atendimento import TransferirAtendente
 from revgas_chatbot.registro import EmAndamento, PedidoInvalido, RegistradorDeVendas, VendaCriada
@@ -89,6 +96,7 @@ class Dependencias:
     catalogo: dict[int, ProdutoCatalogo]
     pagamentos: set[str]
     seguranca: str  # orientações para vazamento (config/seguranca.txt)
+    interpretador: Interpretador | None = None  # IA (C2); None = só o roteiro do C1
 
 
 class Conversa:
@@ -112,6 +120,7 @@ class Conversa:
         self._quantidade = 0
         self._pagamento = ""
         self._troco: Decimal | None = None
+        self._troco_respondido = False
         self._pedido_id = str(uuid.uuid4())
 
     # --- interface -------------------------------------------------------------
@@ -150,7 +159,7 @@ class Conversa:
     def _passo_confirmar_numero(self, texto: str) -> list[str]:
         resposta = sim_ou_nao(texto)
         if resposta is None:
-            return [SIM_OU_NAO, self._pergunta_numero()]
+            return self._nao_entendeu(texto, [SIM_OU_NAO, self._pergunta_numero()])
         if resposta is False:
             self._passo = "DIGITAR_NUMERO"
             return [PERGUNTA_DO_NUMERO]
@@ -172,7 +181,9 @@ class Conversa:
     def _passo_digitar_numero(self, texto: str) -> list[str]:
         numero = telefone(texto)
         if numero is None:
-            return ["Não entendi o número. Envie com DDD, por exemplo (86) 99999-0000.", PERGUNTA_DO_NUMERO]
+            return self._nao_entendeu(
+                texto, ["Não entendi o número. Envie com DDD, por exemplo (86) 99999-0000.", PERGUNTA_DO_NUMERO]
+            )
         self._telefone = numero
         self._passo = "CONFIRMAR_NUMERO_DIGITADO"
         return [self._pergunta_numero_digitado()]
@@ -180,7 +191,7 @@ class Conversa:
     def _passo_confirmar_numero_digitado(self, texto: str) -> list[str]:
         resposta = sim_ou_nao(texto)
         if resposta is None:
-            return [SIM_OU_NAO, self._pergunta_numero_digitado()]
+            return self._nao_entendeu(texto, [SIM_OU_NAO, self._pergunta_numero_digitado()])
         if resposta is False:
             self._passo = "DIGITAR_NUMERO"
             return [PERGUNTA_DO_NUMERO]
@@ -195,6 +206,8 @@ class Conversa:
         nome = " ".join(texto.split())
         if not nome:
             return ["Preciso do seu nome para o pedido.", "Qual é o seu nome?"]
+        if self._vazamento_pela_ia(texto):
+            return self._vazamento(texto)
         self._nome = nome
         if self._corrigindo:
             return self._voltar_ao_resumo()
@@ -204,7 +217,7 @@ class Conversa:
     def _passo_produto(self, texto: str) -> list[str]:
         indice = opcao(texto, [p.nome for _, p in self._produtos])
         if indice is None:
-            return [DA_LISTA, self._pergunta_produto()]
+            return self._nao_entendeu(texto, [DA_LISTA, self._pergunta_produto()], extrair=True)
         self._produto_id = self._produtos[indice][0]
         self._passo = "QUANTIDADE"
         return ["Quantos?"]
@@ -212,27 +225,18 @@ class Conversa:
     def _passo_quantidade(self, texto: str) -> list[str]:
         quantidade = texto.strip()
         if not quantidade.isdigit() or not 1 <= int(quantidade) <= MAX_QUANTIDADE:
-            return [f"Envie um número de 1 a {MAX_QUANTIDADE}.", "Quantos?"]
+            return self._nao_entendeu(texto, [f"Envie um número de 1 a {MAX_QUANTIDADE}.", "Quantos?"])
         self._quantidade = int(quantidade)
-        if self._corrigindo:
-            if self._pagamento == DINHEIRO and self._troco is not None and self._troco < self._total():
-                self._passo = "TROCO"  # o total subiu: o troco informado não serve mais
-                return [PERGUNTA_DO_TROCO]
-            return self._voltar_ao_resumo()
-        if self._endereco_do_cadastro is not None:
-            self._passo = "ENDERECO_DO_CADASTRO"
-            return [self._pergunta_endereco_do_cadastro()]
-        return self._comecar_endereco()
+        return self._seguir()
 
     def _passo_endereco_do_cadastro(self, texto: str) -> list[str]:
         resposta = sim_ou_nao(texto)
         if resposta is None:
-            return [SIM_OU_NAO, self._pergunta_endereco_do_cadastro()]
+            return self._nao_entendeu(texto, [SIM_OU_NAO, self._pergunta_endereco_do_cadastro()])
         if resposta is False:
             return self._comecar_endereco()
         self._endereco = self._endereco_do_cadastro
-        self._passo = "PAGAMENTO"
-        return [self._pergunta_pagamento()]
+        return self._seguir()
 
     def _comecar_endereco(self) -> list[str]:
         self._campos: dict[str, str | None] = {}
@@ -242,6 +246,8 @@ class Conversa:
     def _passo_campo_do_endereco(self, texto: str) -> list[str]:
         campo, pergunta, opcional, explicacao = CAMPOS_DO_ENDERECO[len(self._campos)]
         valor = " ".join(texto.split())
+        if valor and normalizar(valor) != "pular" and self._vazamento_pela_ia(texto):
+            return self._vazamento(texto)
         if opcional and normalizar(valor) == "pular":
             valor = None
         elif not valor:
@@ -256,15 +262,15 @@ class Conversa:
         self._endereco = Endereco(**self._campos)
         if self._corrigindo:
             return self._voltar_ao_resumo()
-        self._passo = "PAGAMENTO"
-        return [self._pergunta_pagamento()]
+        return self._seguir()
 
     def _passo_pagamento(self, texto: str) -> list[str]:
         indice = opcao(texto, [ROTULOS_DE_PAGAMENTO[t] for t in self._formas])
         if indice is None:
-            return [DA_LISTA, self._pergunta_pagamento()]
+            return self._nao_entendeu(texto, [DA_LISTA, self._pergunta_pagamento()])
         self._pagamento = self._formas[indice]
         self._troco = None
+        self._troco_respondido = False
         if self._pagamento == DINHEIRO:
             self._passo = "TROCO"
             return [PERGUNTA_DO_TROCO]
@@ -276,17 +282,18 @@ class Conversa:
         else:
             valor = valor_em_reais(texto)
             if valor is None or valor < self._total():
-                return [
+                return self._nao_entendeu(texto, [
                     f"O troco precisa ser para pelo menos {reais(self._total())}, ou responda 'não'.",
                     PERGUNTA_DO_TROCO,
-                ]
+                ])
             self._troco = valor
+        self._troco_respondido = True
         return self._voltar_ao_resumo()
 
     def _passo_resumo(self, texto: str) -> list[str]:
         escolha = opcao(texto, OPCOES_DO_RESUMO)
         if escolha is None:
-            return [DA_LISTA, self._resumo()]
+            return self._nao_entendeu(texto, [DA_LISTA, self._resumo()])
         if escolha == 1:
             self._passo = "CORRIGIR"
             return [PERGUNTA_DO_QUE_CORRIGIR]
@@ -363,7 +370,7 @@ class Conversa:
     def _passo_corrigir(self, texto: str) -> list[str]:
         escolha = opcao(texto, O_QUE_CORRIGIR)
         if escolha is None:
-            return [DA_LISTA, PERGUNTA_DO_QUE_CORRIGIR]
+            return self._nao_entendeu(texto, [DA_LISTA, PERGUNTA_DO_QUE_CORRIGIR])
         self._corrigindo = True
         if escolha == 0:
             self._passo = "PRODUTO"
@@ -386,6 +393,86 @@ class Conversa:
             self._novo_rascunho()
             return self.iniciar()
         return ["Para um novo pedido, envie oi."]
+
+    # --- IA (C2): só onde o roteiro não entendeu -----------------------------------
+
+    def _interpretar(self, texto: str) -> PedidoInterpretado | None:
+        """Consulta a IA e valida a resposta. Sem IA, erro ou nada útil → None.
+
+        Vai ao provedor só o texto digitado agora (com números longos
+        mascarados) + produtos, formas de pagamento e o passo (C2-4, C2-D1).
+        """
+        if self._d.interpretador is None:
+            return None
+        contexto = Contexto(
+            passo=self._passo,
+            produtos=tuple(p.nome for _, p in self._produtos),
+            pagamentos=tuple(ROTULOS_DE_PAGAMENTO[t] for t in self._formas),
+        )
+        try:
+            interpretacao = self._d.interpretador.interpretar(mascarar(texto), contexto)
+            if interpretacao is None:
+                return None
+            return validar_interpretacao(
+                interpretacao,
+                self._d.catalogo,
+                {t: ROTULOS_DE_PAGAMENTO[t] for t in self._formas},
+            )
+        except Exception:  # noqa: BLE001 - a IA nunca derruba a conversa (C2-3)
+            return None
+
+    def _nao_entendeu(self, texto: str, mensagens: list[str], *, extrair: bool = False) -> list[str]:
+        """O roteiro não entendeu: a IA pode reconhecer a intenção (e, no produto, os dados)."""
+        interpretado = self._interpretar(texto)
+        if interpretado is None:
+            return mensagens
+        if interpretado.intencao == "VAZAMENTO":
+            return self._vazamento(texto)
+        if interpretado.intencao in ("CANCELAR_OU_DEVOLVER", "ATENDENTE", "SAIR"):
+            return self._comando(interpretado.intencao, texto)
+        if extrair and interpretado.intencao == "PEDIR" and interpretado.product_id is not None:
+            return self._preencher(interpretado)
+        return mensagens
+
+    def _vazamento_pela_ia(self, texto: str) -> bool:
+        """Nos passos de texto livre, a IA só serve para achar vazamento (S1)."""
+        interpretado = self._interpretar(texto)
+        return interpretado is not None and interpretado.intencao == "VAZAMENTO"
+
+    def _preencher(self, interpretado: PedidoInterpretado) -> list[str]:
+        """Usa o que a IA entendeu e passou na validação; o resto é perguntado (3.1)."""
+        self._produto_id = interpretado.product_id
+        if interpretado.quantidade is not None:
+            self._quantidade = interpretado.quantidade
+        if interpretado.endereco is not None:
+            self._endereco = interpretado.endereco  # o endereço dito substitui o do cadastro
+        if interpretado.pagamento is not None:
+            self._pagamento = interpretado.pagamento
+            self._troco = interpretado.troco
+            self._troco_respondido = interpretado.troco is not None
+        return self._seguir()
+
+    def _seguir(self) -> list[str]:
+        """Vai para o primeiro item do pedido que ainda falta (ou para o resumo)."""
+        if not self._quantidade:
+            self._passo = "QUANTIDADE"
+            return ["Quantos?"]
+        if self._endereco is None:
+            if self._endereco_do_cadastro is not None:
+                self._passo = "ENDERECO_DO_CADASTRO"
+                return [self._pergunta_endereco_do_cadastro()]
+            return self._comecar_endereco()
+        if not self._pagamento:
+            self._passo = "PAGAMENTO"
+            return [self._pergunta_pagamento()]
+        if self._pagamento == DINHEIRO and self._troco is not None and self._troco < self._total():
+            # O total mudou (ex.: correção do produto) e o troco informado não serve mais (I4).
+            self._troco = None
+            self._troco_respondido = False
+        if self._pagamento == DINHEIRO and not self._troco_respondido:
+            self._passo = "TROCO"
+            return [PERGUNTA_DO_TROCO]
+        return self._voltar_ao_resumo()
 
     # --- cliente e transferência ---------------------------------------------------
 
