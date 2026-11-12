@@ -11,9 +11,9 @@ não existe no Brasil, então nunca é o número de uma pessoa real).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Mapping
 
 from revgas_chatbot.api import ApiRevGas, Relogio
 from revgas_chatbot.api_cadenciada import ApiCadenciada
@@ -21,6 +21,7 @@ from revgas_chatbot.api_falsa import ApiRevGasFalsa
 from revgas_chatbot.config import carregar_catalogo, carregar_pagamentos
 from revgas_chatbot.conversa import Conversa, Dependencias
 from revgas_chatbot.fila import FilaDeAtendimento
+from revgas_chatbot.interpretacao import Interpretador
 from revgas_chatbot.interpretador_gemini import InterpretadorGemini
 from revgas_chatbot.registro import RegistradorDeVendas
 from revgas_chatbot.relogio import RelogioDoSistema
@@ -63,13 +64,15 @@ def api_de_demonstracao(relogio: Relogio) -> ApiRevGasFalsa:
 
 @dataclass(frozen=True)
 class Programa:
-    """O programa montado: cria a conversa de um telefone e diz se a IA está ligada."""
+    """O programa montado: cria conversas e diz se a IA está ligada."""
 
-    nova_conversa: Callable[[str], Conversa]
+    dependencias: Dependencias
     ia_ligada: bool
 
-    def __call__(self, telefone: str) -> Conversa:
-        return self.nova_conversa(telefone)
+    def __call__(self, telefone: str, *, numero_confiavel: bool = True, com_ia: bool = True) -> Conversa:
+        """`com_ia=False` cria a conversa sem a IA (H2: número real na web)."""
+        dependencias = self.dependencias if com_ia else replace(self.dependencias, interpretador=None)
+        return Conversa(telefone, dependencias, numero_confiavel=numero_confiavel)
 
 
 def montar(
@@ -79,6 +82,7 @@ def montar(
     api: ApiRevGas | None = None,
     pasta_config: Path = PASTA_CONFIG,
     ambiente: Mapping[str, str] | None = None,
+    interpretador: Interpretador | None = None,  # testes: a IA falsa; senão, decide pelo ambiente
 ) -> Programa:
     """Liga as peças e devolve o programa.
 
@@ -90,7 +94,8 @@ def montar(
     seguranca = _orientacoes_de_seguranca(pasta_config / "seguranca.txt")
     relogio = relogio or RelogioDoSistema()
     api = api if api is not None else api_de_demonstracao(relogio)
-    interpretador = _interpretador(ambiente, api)
+    if interpretador is None:
+        interpretador = _interpretador(ambiente, api)
     cadenciada = ApiCadenciada(api, relogio)  # a única do programa
     catalogo = carregar_catalogo(pasta_config / "catalogo.json")
     pagamentos = carregar_pagamentos(pasta_config / "pagamentos.json")
@@ -108,11 +113,10 @@ def montar(
         pagamentos=pagamentos,
         seguranca=seguranca,
         interpretador=interpretador,
+        # Toda IA deste programa é a da cota grátis: só com números fictícios (C2-1, H3).
+        ia_so_com_numero_ficticio=interpretador is not None,
     )
-    return Programa(
-        nova_conversa=lambda telefone: Conversa(telefone, dependencias),
-        ia_ligada=interpretador is not None,
-    )
+    return Programa(dependencias=dependencias, ia_ligada=interpretador is not None)
 
 
 def _interpretador(ambiente: Mapping[str, str], api: ApiRevGas) -> InterpretadorGemini | None:
