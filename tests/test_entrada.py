@@ -6,6 +6,8 @@ import pytest
 
 from revgas_chatbot.entrada import (
     comando,
+    numero_do_endereco,
+    pergunta_ou_nao_sei,
     opcao,
     sim_ou_nao,
     telefone,
@@ -163,3 +165,38 @@ def test_telefone_com_digitos_que_nao_sao_ascii_e_invalido(digitado):
 @pytest.mark.parametrize("digitado", ["２００", "200,０0"])
 def test_valor_com_digitos_que_nao_sao_ascii_e_invalido(digitado):
     assert valor_em_reais(digitado) is None
+
+
+# --- A1: pergunta ou "não sei" não é dado; A2: número do endereço ---------------------
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["voce consegue pegar a rua", "qual voce acha q é", "não sei", "Não sei.", "rua?", "sei lá",
+     "Quais são as opções", "como assim", "onde fica isso", "vc sabe", "será que é a 7", "não lembro"],
+)
+def test_pergunta_ou_nao_sei(texto):
+    assert pergunta_ou_nao_sei(texto) is True
+
+
+@pytest.mark.parametrize(
+    "texto",
+    ["Rua do Atendente, 10", "Rua Qualquer Coisa", "Centro", "Teresina", "Maria Pessoa",
+     "Rua Onde Canta o Sabiá", "Vicente", "Condomínio Edifício Goya", "Casa 2"],
+)
+def test_nao_e_pergunta(texto):
+    assert pergunta_ou_nao_sei(texto) is False
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [("10", "10"), (" 120 ", "120"), ("10A", "10A"), ("10a", "10A"), ("10 b", "10B"),
+     ("S/N", "S/N"), ("s/n", "S/N"), ("sn", "S/N"), ("sem número", "S/N")],
+)
+def test_numero_do_endereco_valido(texto, esperado):
+    assert numero_do_endereco(texto) == esperado
+
+
+@pytest.mark.parametrize("texto", ["ap409", "apto 12", "bloco b", "dez", "", "10-20", "１０", "1234567"])
+def test_numero_do_endereco_invalido(texto):
+    assert numero_do_endereco(texto) is None

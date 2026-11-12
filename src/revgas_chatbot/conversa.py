@@ -20,8 +20,10 @@ from revgas_chatbot.api_cadenciada import ApiCadenciada
 from revgas_chatbot.entrada import (
     comando,
     normalizar,
+    numero_do_endereco,
     numero_ficticio,
     opcao,
+    pergunta_ou_nao_sei,
     sim_ou_nao,
     telefone,
     telefone_legivel,
@@ -87,6 +89,17 @@ CAMPOS_DO_ENDERECO = [
     ("complemento", "Complemento? (ou 'pular')", True, ""),
     ("referencia", "Ponto de referência? (ou 'pular')", True, ""),
 ]
+
+
+# A1: como cada campo aparece na explicação ("Me diga <rótulo> (ex.: <exemplo>)").
+ROTULOS_DOS_CAMPOS = {
+    "logradouro": ("o nome da rua", "Rua das Flores"),
+    "numero": ("o número", "120, ou S/N"),
+    "bairro": ("o bairro", "Centro"),
+    "cidade": ("a cidade", "Teresina"),
+    "complemento": ("o complemento", "Apto 12, ou 'pular'"),
+    "referencia": ("um ponto de referência", "perto da praça, ou 'pular'"),
+}
 
 
 @dataclass(frozen=True)
@@ -223,8 +236,15 @@ class Conversa:
         nome = " ".join(texto.split())
         if not nome:
             return ["Preciso do seu nome para o pedido.", "Qual é o seu nome?"]
-        if self._vazamento_pela_ia(texto):
+        intencao = self._intencao_em_texto_livre(texto)
+        if intencao == "VAZAMENTO":
             return self._vazamento(texto)
+        if intencao == "PERGUNTA" or pergunta_ou_nao_sei(nome):  # A1: "não sei" não é nome
+            return [
+                "Não consigo descobrir o seu nome sozinho. Me diga como você se chama. "
+                "Se preferir, escreva atendente.",
+                "Qual é o seu nome?",
+            ]
         self._nome = nome
         if self._corrigindo:
             return self._voltar_ao_resumo()
@@ -269,12 +289,18 @@ class Conversa:
                 interpretado = self._interpretar(texto)
                 if interpretado is not None and interpretado.intencao == "VAZAMENTO":
                     return self._vazamento(texto)
+                if (interpretado is not None and interpretado.intencao == "PERGUNTA") or pergunta_ou_nao_sei(valor):
+                    return self._nao_e_um_dado(campo, pergunta)  # A1
                 if interpretado is not None and interpretado.campos_do_endereco:
                     self._campos.update(interpretado.campos_do_endereco)
                     return self._proximo_campo_ou_fim()
                 # Sem IA ou nada útil (S3): o texto inteiro é a rua, como no C1.
-            elif self._vazamento_pela_ia(texto):
-                return self._vazamento(texto)
+            else:
+                intencao = self._intencao_em_texto_livre(texto)
+                if intencao == "VAZAMENTO":
+                    return self._vazamento(texto)
+                if campo != "estado" and (intencao == "PERGUNTA" or pergunta_ou_nao_sei(valor)):
+                    return self._nao_e_um_dado(campo, pergunta)  # A1
         if opcional and normalizar(valor) == "pular":
             valor = None
         elif not valor:
@@ -283,8 +309,21 @@ class Conversa:
             valor = nome_do_estado(valor)
             if valor is None:
                 return [explicacao, pergunta]
+        elif campo == "numero":
+            valor = numero_do_endereco(valor)
+            if valor is None:  # A2: "ap409" não é o número do prédio
+                return ["O apartamento ou bloco vai no complemento.", "Qual é o número do prédio ou da casa? (ou S/N)"]
         self._campos[campo] = valor
         return self._proximo_campo_ou_fim()
+
+    def _nao_e_um_dado(self, campo: str, pergunta: str) -> list[str]:
+        """A1: a resposta foi uma pergunta ou "não sei": nada é guardado."""
+        rotulo, exemplo = ROTULOS_DOS_CAMPOS[campo]
+        return [
+            f"Não consigo descobrir o endereço sozinho. Me diga {rotulo} (ex.: {exemplo}). "
+            "Se preferir, escreva atendente.",
+            pergunta,
+        ]
 
     def _campo_atual(self) -> tuple[str, str, bool, str]:
         """O primeiro campo do endereço que ainda não foi respondido."""
@@ -471,10 +510,13 @@ class Conversa:
             return self._preencher(interpretado)
         return mensagens
 
-    def _vazamento_pela_ia(self, texto: str) -> bool:
-        """Nos passos de texto livre, a IA só serve para achar vazamento (S1)."""
+    def _intencao_em_texto_livre(self, texto: str) -> str | None:
+        """Nos passos de texto livre, a IA só serve para achar VAZAMENTO (S1) ou
+        PERGUNTA (A1). Atendente/cancelar/sair vindos da IA são ignorados (V3)."""
         interpretado = self._interpretar(texto)
-        return interpretado is not None and interpretado.intencao == "VAZAMENTO"
+        if interpretado is not None and interpretado.intencao in ("VAZAMENTO", "PERGUNTA"):
+            return interpretado.intencao
+        return None
 
     def _preencher(self, interpretado: PedidoInterpretado) -> list[str]:
         """Usa o que a IA entendeu e passou na validação; o resto é perguntado (3.1)."""
@@ -610,6 +652,8 @@ class Conversa:
                 f"Telefone: {telefone_legivel(self._telefone)}",
                 f"{self._quantidade}x {produto.nome} — {reais(self._total())}",
                 f"Entrega: {e.logradouro}, {e.numero} — {e.bairro}, {e.cidade}, {e.estado}",
+                *([f"Complemento: {e.complemento}"] if e.complemento else []),  # A3
+                *([f"Referência: {e.referencia}"] if e.referencia else []),
                 f"Pagamento: {self._descricao_do_pagamento()}",
             ]
         )

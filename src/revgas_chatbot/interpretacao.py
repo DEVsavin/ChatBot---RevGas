@@ -13,11 +13,12 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Protocol
 
-from revgas_chatbot.entrada import normalizar, opcao, valor_em_reais
+from revgas_chatbot.entrada import normalizar, numero_do_endereco, opcao, valor_em_reais
 from revgas_chatbot.estados import NOMES_POR_SIGLA, nome_do_estado
 from revgas_chatbot.pedido import Endereco, ProdutoCatalogo
 
-INTENCOES = frozenset({"PEDIR", "CANCELAR_OU_DEVOLVER", "ATENDENTE", "VAZAMENTO", "SAIR", "OUTRA"})
+# PERGUNTA: o cliente perguntou algo ou disse que não sabe (A1): não é um dado.
+INTENCOES = frozenset({"PEDIR", "CANCELAR_OU_DEVOLVER", "ATENDENTE", "VAZAMENTO", "SAIR", "PERGUNTA", "OUTRA"})
 MAX_QUANTIDADE = 10
 MAX_TEXTO = 100
 DINHEIRO = "MONEY"
@@ -153,6 +154,10 @@ def _campos_do_endereco(endereco: Any) -> dict[str, str]:
         valor = " ".join(valor.split())
         if nome == "estado":
             valor = nome_do_estado(valor)
+            if valor is None:
+                continue
+        if nome == "numero":
+            valor = numero_do_endereco(valor)  # A2: "ap409" não é o número do prédio
             if valor is None:
                 continue
         campos[nome] = valor

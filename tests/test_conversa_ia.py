@@ -344,3 +344,29 @@ def test_numero_ficticio_digitado_mantem_a_ia(dependencias, ia):
     assert "Quantos?" not in texto(conversa.responder("quero 2 botijões"))
     # "Fulano" também foi: no passo do nome a IA é consultada só para vazamento (S1).
     assert [t for t, _ in ia.recebidos] == ["Fulano", "quero 2 botijões"]
+
+
+# --- Ajuste do endereço (A1) com a IA ---------------------------------------------------
+
+
+def test_pergunta_reconhecida_pela_ia_no_campo_da_rua(conversa, ia):
+    ia.respostas["tem como você ver aí pra mim"] = Interpretacao(intencao="PERGUNTA")
+    *_, resposta = dialogo(conversa, *ATE_A_RUA, "tem como você ver aí pra mim")
+
+    assert resposta[0].startswith("Não consigo descobrir o endereço sozinho.")
+    assert resposta[-1] == "Qual é a rua?"
+
+
+def test_pergunta_reconhecida_pela_ia_no_bairro(conversa, ia):
+    ia.respostas["tem como você ver aí pra mim"] = Interpretacao(intencao="PERGUNTA")
+    *_, resposta = dialogo(conversa, *ATE_A_RUA, "Rua Nova", "10", "tem como você ver aí pra mim")
+
+    assert resposta[-1] == "Qual é o bairro?"
+
+
+def test_pergunta_reconhecida_pela_ia_no_nome(dependencias, ia):
+    ia.respostas["tem como você ver aí pra mim"] = Interpretacao(intencao="PERGUNTA")
+    conversa = Conversa(NOVO, dependencias)
+    *_, resposta = dialogo(conversa, "sim", "tem como você ver aí pra mim")
+
+    assert resposta[-1] == "Qual é o seu nome?"

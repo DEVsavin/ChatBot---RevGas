@@ -37,7 +37,7 @@ Responda só com o JSON pedido. Regras:
 - Não invente nada: preencha um campo só se o cliente disse aquilo nesta mensagem.
 - intencao: PEDIR (quer comprar ou está respondendo sobre o pedido), VAZAMENTO (cheiro de gás,
   gás escapando, vazamento), CANCELAR_OU_DEVOLVER, ATENDENTE (quer falar com uma pessoa),
-  SAIR (quer encerrar) ou OUTRA.
+  SAIR (quer encerrar), PERGUNTA (fez uma pergunta ou disse que não sabe a resposta) ou OUTRA.
 - produto: um dos produtos da lista, escrito exatamente como na lista.
 - pagamento: uma das formas de pagamento da lista, escrita exatamente como na lista.
 - quantidade: número inteiro de unidades.
@@ -50,7 +50,7 @@ SCHEMA = {
     "properties": {
         "intencao": {
             "type": "string",
-            "enum": ["PEDIR", "CANCELAR_OU_DEVOLVER", "ATENDENTE", "VAZAMENTO", "SAIR", "OUTRA"],
+            "enum": ["PEDIR", "CANCELAR_OU_DEVOLVER", "ATENDENTE", "VAZAMENTO", "SAIR", "PERGUNTA", "OUTRA"],
         },
         "produto": _TEXTO,
         "quantidade": {"type": "integer"},

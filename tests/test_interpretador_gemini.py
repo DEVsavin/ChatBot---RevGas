@@ -106,3 +106,11 @@ def test_a_chave_e_o_texto_nunca_vao_para_o_log(caplog):
     registros = "\n".join(r.getMessage() for r in caplog.records)
     assert CHAVE not in registros
     assert "Rua Secreta" not in registros
+
+
+def test_schema_pede_tambem_a_intencao_pergunta():
+    ia, recebidas = com_google(lambda r: httpx.Response(200, json=resposta_do_google({"intencao": "PERGUNTA"})))
+
+    assert ia.interpretar("não sei", CONTEXTO).intencao == "PERGUNTA"
+    corpo = json.loads(recebidas[0].content)
+    assert "PERGUNTA" in corpo["generationConfig"]["responseJsonSchema"]["properties"]["intencao"]["enum"]

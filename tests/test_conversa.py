@@ -623,3 +623,64 @@ def test_numero_nao_confiavel_continua_assim_depois_de_oi(dependencias, api):
 
     assert "Qual é o seu nome?" in texto(conversa.responder("sim"))
     assert api.operacoes == []
+
+
+# --- Ajuste do endereço (A1–A3), sem IA -------------------------------------------------
+
+NAO_DESCOBRE = "Não consigo descobrir o endereço sozinho."
+
+
+@pytest.mark.parametrize("resposta", ["voce consegue pegar a rua", "qual voce acha q é", "não sei", "rua?"])
+@pytest.mark.parametrize("campo, antes", [("rua", ()), ("bairro", ("Rua Nova", "10"))])
+def test_pergunta_ou_nao_sei_no_endereco_nao_e_guardado(conversa_nova, campo, antes, resposta):
+    *_, respondido = dialogo(conversa_nova, "sim", "Joana", "1", "1", *antes, resposta)
+
+    assert respondido[0].startswith(NAO_DESCOBRE)
+    assert "atendente" in respondido[0]
+    pergunta = "Qual é a rua?" if campo == "rua" else "Qual é o bairro?"
+    assert respondido[-1] == pergunta  # repete a mesma pergunta
+
+
+def test_pergunta_no_nome_nao_vira_nome(conversa_nova):
+    *_, respondido = dialogo(conversa_nova, "sim", "não sei")
+
+    assert respondido[-1] == "Qual é o seu nome?"
+    assert "Olá" not in texto(respondido)
+
+
+@pytest.mark.parametrize("rua", ["Rua do Atendente, 10", "Rua Qualquer Coisa", "Rua Onde Canta o Sabiá"])
+def test_rua_com_palavra_parecida_continua_valendo(conversa_nova, rua):
+    *_, respondido = dialogo(conversa_nova, "sim", "Joana", "1", "1", rua)
+
+    assert "Qual é o número?" in texto(respondido)
+
+
+@pytest.mark.parametrize("numero", ["ap409", "apto 12", "bloco b"])
+def test_apartamento_no_numero_e_recusado_com_a_explicacao(conversa_nova, numero):
+    *_, respondido = dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", numero)
+
+    assert respondido == ["O apartamento ou bloco vai no complemento.", "Qual é o número do prédio ou da casa? (ou S/N)"]
+
+
+@pytest.mark.parametrize("numero, gravado", [("10", "10"), ("10A", "10A"), ("S/N", "S/N")])
+def test_numero_valido_e_aceito(conversa_nova, api, numero, gravado):
+    dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", numero, "Centro", "Teresina", "PI",
+            "pular", "pular", "1", "1")
+
+    [venda] = api.vendas_criadas()
+    assert venda["number"] == gravado
+
+
+def test_resumo_mostra_complemento_e_referencia(conversa_nova):
+    *_, resumo = dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", "10", "Centro", "Teresina",
+                         "PI", "Condomínio Edifício Goya, ap 409", "perto da praça", "1")
+
+    assert "Complemento: Condomínio Edifício Goya, ap 409" in texto(resumo)
+    assert "Referência: perto da praça" in texto(resumo)
+
+
+def test_resumo_sem_complemento_nem_referencia_nao_mostra_as_linhas(conversa_nova):
+    *_, resumo = dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", "10", "Centro", "Teresina",
+                         "PI", "pular", "pular", "1")
+
+    assert "Complemento:" not in texto(resumo) and "Referência:" not in texto(resumo)

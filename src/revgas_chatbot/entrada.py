@@ -129,3 +129,39 @@ def comando(texto: str, *, livre: bool) -> str | None:
         elif _contem(mensagem, palavras):
             return nome
     return None
+
+
+# A1: palavras que, no começo da mensagem, indicam pergunta ou dúvida.
+_DUVIDA = ("qual", "quais", "como", "onde", "voce", "vc", "sera", "nao sei", "sei la", "nao lembro")
+
+
+def pergunta_ou_nao_sei(texto: str) -> bool:
+    """A1: "qual é a rua?", "não sei", "você consegue pegar" não são um dado.
+
+    Regra simples: termina com "?" ou COMEÇA com uma palavra de dúvida
+    (palavra no meio, como em "Rua Onde Canta o Sabiá", não conta).
+    """
+    if texto.strip().endswith("?"):
+        return True
+    mensagem = normalizar(texto)
+    return any(mensagem == p or mensagem.startswith(p + " ") for p in _DUVIDA)
+
+
+_SEM_NUMERO = frozenset({"s/n", "sn", "s n", "sem numero"})
+_NUMERO = re.compile(r"(\d{1,6}) ?([a-z])?", re.ASCII)
+
+
+def numero_do_endereco(texto: str) -> str | None:
+    """A2: dígitos com uma letra opcional ("10", "10A") ou "S/N"; o resto → None.
+
+    "ap409", "apto 12", "bloco b" não são o número do prédio (vão no complemento).
+    """
+    if _tem_digito_nao_ascii(texto):
+        return None
+    mensagem = normalizar(texto)
+    if mensagem in _SEM_NUMERO:
+        return "S/N"
+    encontrado = _NUMERO.fullmatch(mensagem)
+    if encontrado is None:
+        return None
+    return encontrado.group(1) + (encontrado.group(2) or "").upper()

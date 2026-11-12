@@ -177,3 +177,18 @@ def test_numero_so_vale_como_numero_inteiro_no_texto():
 
 def test_sem_texto_a_validacao_continua_como_antes():
     assert validar(intencao="PEDIR", endereco=ENDERECO).endereco is not None
+
+
+# --- Ajuste do endereço: PERGUNTA e número (A1, A2) -----------------------------------
+
+
+@pytest.mark.parametrize("intencao", ["PERGUNTA", "pergunta"])
+def test_intencao_pergunta(intencao):
+    assert validar(intencao=intencao).intencao == "PERGUNTA"
+
+
+@pytest.mark.parametrize("numero, esperado", [("ap409", None), ("bloco b", None), ("10a", "10A"), ("s/n", "S/N")])
+def test_numero_do_endereco_dito_pela_ia_segue_a_regra_a2(numero, esperado):
+    resultado = validar(intencao="PEDIR", endereco={"rua": "Rua Nova", "numero": numero})
+
+    assert resultado.campos_do_endereco.get("numero") == esperado
