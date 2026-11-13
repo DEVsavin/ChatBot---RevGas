@@ -485,3 +485,83 @@ def test_400_em_dado_do_cliente_pede_correcao():
 
     assert isinstance(resultado, PedidoInvalido)
     assert [p.campo for p in resultado.problemas] == ["endereco.numero"]
+
+
+# --- M5 (D16): modo real, com o cliente de demonstração fixo ------------------------------
+
+from revgas_chatbot.vendas.registro import VendaReal  # noqa: E402
+
+CLIENTE_DEMO = 5700355
+
+
+def montar_real(api: ApiRevGasFalsa) -> RegistradorDeVendas:
+    return RegistradorDeVendas(
+        api=api, relogio=api.relogio, catalogo=CATALOGO, pagamentos_permitidos=PERMITIDOS,
+        establishment_id=2580, venda_real=VendaReal(cliente_fixo=CLIENTE_DEMO),
+    )
+
+
+def test_modo_real_usa_o_cliente_fixo_sem_nenhuma_chamada_de_cliente():
+    api = ApiRevGasFalsa(relogio=RelogioFalso())  # ninguém cadastrado: não importa
+    resultado = montar_real(api).registrar(pedido())
+
+    assert api.operacoes == ["criar_venda"]
+    [venda] = api.vendas_criadas()
+    assert venda["customer_id"] == CLIENTE_DEMO
+    assert isinstance(resultado, VendaCriada)
+
+
+def test_modo_real_manda_broadcast_none_coordenadas_e_origem():
+    api = ApiRevGasFalsa(relogio=RelogioFalso())
+    montar_real(api).registrar(pedido(itens=(Item(product_id=1, quantidade=2),),
+                                      pagamentos=(Pagamento(tipo="PIX", valor=Decimal("220.00")),)))
+
+    [venda] = api.vendas_criadas()
+    assert venda["broadcast"] == "NONE"
+    assert (venda["lat"], venda["lon"]) == (-5.0892, -42.8016)
+    assert (venda["origin"], venda["option"]) == ("INTEGRATION", "NORMAL")
+    assert [(p["product_id"], p["quantity"]) for p in venda["products"]] == [(1, 2)]
+    assert "deliverer_id" not in venda
+
+
+def test_modo_real_observation_minima_sem_nome_nem_telefone():
+    api = ApiRevGasFalsa(relogio=RelogioFalso())
+    p = pedido(pagamentos=(Pagamento(tipo="MONEY", valor=Decimal("110.00")),), troco_para=Decimal("200.00"))
+    montar_real(api).registrar(p)
+
+    observation = api.vendas_criadas()[0]["observation"]
+    assert observation == "DEMONSTRAÇÃO DO CHATBOT - NÃO ENTREGAR. Troco para R$ 200,00. [chatbot:ped-1]"
+    assert "Cliente Teste" not in observation and TELEFONE not in observation
+
+
+def test_modo_real_timeout_acha_a_venda_pela_marca_entre_outras_do_mesmo_cliente():
+    api = ApiRevGasFalsa(relogio=RelogioFalso())
+    for i in range(25):  # outras vendas da demo, do mesmo cliente fixo
+        api.semear_venda(montar_corpo_venda(pedido(pedido_id=f"outro-{i}"), customer_id=CLIENTE_DEMO,
+                                            catalogo=CATALOGO, establishment_id=2580))
+    api.roteirizar("criar_venda", TIMEOUT_DEPOIS_DE_CRIAR)
+    resultado = montar_real(api).registrar(pedido())
+
+    assert api.operacoes.count("criar_venda") == 1
+    assert isinstance(resultado, VendaCriada)
+    assert "[chatbot:ped-1]" in next(v["observation"] for v in api.vendas_criadas() if v["id"] == resultado.id)
+
+
+def test_modo_real_timeout_sem_venda_transfere_sem_segunda_criacao():
+    api = ApiRevGasFalsa(relogio=RelogioFalso())
+    api.roteirizar("criar_venda", TIMEOUT_SEM_CRIAR)
+    resultado = montar_real(api).registrar(pedido())
+
+    assert api.operacoes.count("criar_venda") == 1
+    assert isinstance(resultado, TransferirAtendente) and resultado.venda_pode_existir
+
+
+def test_sem_modo_real_nada_muda():
+    api = api_com_cliente()
+    montar(api).registrar(pedido())
+
+    [venda] = api.vendas_criadas()
+    assert venda["customer_id"] == 77
+    for campo in ("broadcast", "lat", "lon"):
+        assert campo not in venda
+    assert not venda["observation"].startswith("DEMONSTRAÇÃO")

@@ -336,3 +336,51 @@ def test_comando_sem_configuracao_nao_liga(tmp_path):
 def test_comando_nao_aceita_outro_endereco(tmp_path):
     with pytest.raises(SystemExit):
         main(["--host", "0.0.0.0"], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE)
+
+
+# --- M5 (D16/D17): venda real pelo WhatsApp, só com --venda-real -------------------------
+
+from revgas_chatbot.montagem import ConfigVendaReal  # noqa: E402
+
+AMBIENTE_REAL = {**AMBIENTE, "REVGAS_API_KEY": "chave-ficticia", "REVGAS_API_URL": "https://api.exemplo.test/v1",
+                 "REVGAS_CLIENTE_DEMO": "5700355"}
+
+
+def test_modo_real_pelo_whatsapp_nao_busca_cadastro_e_usa_o_cliente_fixo(tmp_path):
+    api = api_de_demonstracao(RelogioFalso(datetime(2026, 11, 13, 15, 0, tzinfo=FUSO_TERESINA)))
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, ia_permitida=regra_da_ia([EQUIPE]),
+                      venda_real=ConfigVendaReal(url="https://api.exemplo.test/v1", chave="k", cliente_demo=5700355))
+    wa = WhatsAppSimulado(tmp_path, criar_conversa=lambda tel: programa(tel, numero_confiavel=True))
+    wa.api = api
+    respostas = wa.conversa("oi", "sim", "Fulano", "1", "1", "Rua Inventada", "10", "Centro", "Teresina", "PI",
+                            "pular", "pular", "1", "1", de=EQUIPE)
+    wa.atendimento.desligar()
+
+    assert "Qual é o seu nome?" in respostas
+    assert respostas[-1].startswith("Pedido registrado!")
+    assert api.operacoes == ["criar_venda"]
+    assert api.vendas_criadas()[0]["customer_id"] == 5700355
+
+
+def test_comando_whatsapp_com_venda_real_avisa(tmp_path, capsys):
+    main(["--venda-real"], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
+
+    saida = capsys.readouterr().out
+    assert "VENDA REAL LIGADA" in saida
+    assert "chave-ficticia" not in saida
+
+
+def test_comando_whatsapp_sem_venda_real_nao_liga(tmp_path, capsys):
+    main([], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
+
+    assert "VENDA REAL" not in capsys.readouterr().out
+
+
+def test_comando_whatsapp_venda_real_sem_cliente_demo_nao_liga(tmp_path):
+    chamadas = []
+    with pytest.raises(SystemExit) as erro:
+        main(["--venda-real"], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path,
+             ambiente={**AMBIENTE_REAL, "REVGAS_CLIENTE_DEMO": ""})
+
+    assert chamadas == []
+    assert "REVGAS_CLIENTE_DEMO" in str(erro.value)

@@ -481,3 +481,83 @@ def test_erro_da_api_nao_mostra_o_endereco():
 def test_endereco_real_so_junto_de_customer_id_e_sem_avisar(argv):
     with pytest.raises(SystemExit):
         executar(argv, [])
+
+
+# --- M5 (10.6): cancelar as vendas da demonstração ----------------------------------------
+
+AMBIENTE_DEMO = {"REVGAS_CLIENTE_DEMO": "5700355"}
+
+
+def semear(api, *, cliente=5700355, marca="[chatbot:demo-1]", status=None):
+    venda = api.semear_venda({
+        "customer_id": cliente, "channel": "WHATSAPP", "location": "Rua Secreta da Demo",
+        "products": [{"product_id": 26717, "quantity": 1, "value": 110.0}],
+        "observation": f"DEMONSTRAÇÃO DO CHATBOT - NÃO ENTREGAR. {marca}".strip(),
+    })
+    if status:
+        next(v for v in api.vendas if v["id"] == venda["id"])["status"] = status
+    return venda["id"]
+
+
+def cancelar_demo(respostas, *, api, ambiente=AMBIENTE_DEMO):
+    fila, perguntas, saida = list(respostas), [], []
+
+    def perguntar(texto):
+        perguntas.append(texto)
+        return fila.pop(0)
+
+    rodar(["--cancelar-demo"], api=api, relogio=api.relogio, perguntar=perguntar,
+          ler_segredo=lambda t: pytest.fail("não pede telefone"), escrever=saida.append, ambiente=ambiente)
+    return "\n".join(saida), perguntas
+
+
+def test_cancelar_demo_so_oferece_vendas_abertas_do_nosso_cliente_com_a_marca():
+    api = ApiDeTeste()
+    api.ignora_filtros_de_vendas = True  # mesmo se a API ignorar os filtros, só as nossas entram
+    a = semear(api, marca="[chatbot:a]")
+    b = semear(api, marca="[chatbot:b]")
+    semear(api, marca="[chatbot:c]", status="CANCEL")  # já cancelada
+    semear(api, cliente=999, marca="[chatbot:d]")  # de outro cliente
+    semear(api, marca="")  # do nosso cliente, mas sem a marca (feita no painel)
+    saida, perguntas = cancelar_demo(["sim", "sim"], api=api)
+
+    assert sorted(api.cancelamentos) == sorted([a, b])
+    assert len(perguntas) == 2 and all("PUT /sales/" in p for p in perguntas)
+    assert "2 venda(s) da demonstração" in saida
+    assert "Rua Secreta" not in saida + "\n".join(perguntas)
+
+
+def test_cancelar_demo_recusar_nao_cancela():
+    api = ApiDeTeste()
+    semear(api)
+    _, _ = cancelar_demo(["não"], api=api)
+
+    assert api.cancelamentos == []
+
+
+def test_cancelar_demo_sem_vendas_abertas():
+    api = ApiDeTeste()
+    saida, perguntas = cancelar_demo([], api=api)
+
+    assert "Nenhuma venda da demonstração aberta." in saida
+    assert perguntas == []
+
+
+def test_cancelar_demo_respeita_1_requisicao_por_segundo():
+    api = ApiDeTeste()
+    for i in range(3):
+        semear(api, marca=f"[chatbot:{i}]")
+    cancelar_demo(["sim", "sim", "sim"], api=api)
+
+    horarios = api.requisicoes
+    assert len(api.cancelamentos) == 3
+    assert all((b - a).total_seconds() >= 1 for a, b in zip(horarios, horarios[1:]))
+
+
+def test_cancelar_demo_sem_cliente_demo_nao_chama_a_api():
+    api = ApiDeTeste()
+    with pytest.raises(SystemExit) as erro:
+        cancelar_demo([], api=api, ambiente={})
+
+    assert "REVGAS_CLIENTE_DEMO" in str(erro.value)
+    assert api.operacoes == []

@@ -6,6 +6,7 @@
     uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --customer-id <N> --avisar-entregadores
     uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --customer-id <N> --endereco-real
     uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --cancelar <id>
+    uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --cancelar-demo
 
 `--sem-cliente` (D12): a nossa chave recebe 403 em `/customers`. Este modo
 não pede telefone nem toca em clientes: manda só o POST /sales do mesmo
@@ -44,8 +45,9 @@ import json
 import os
 import re
 import uuid
+from datetime import timedelta
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from revgas_chatbot.api_revgas.api import Relogio, Resposta, TempoEsgotado
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
@@ -55,7 +57,7 @@ from revgas_chatbot.conversa.entrada import sim_ou_nao, telefone as ler_telefone
 from revgas_chatbot.montagem import ESTABELECIMENTO, PASTA_CONFIG
 from revgas_chatbot.vendas.pedido import Endereco, Item, Pagamento, Pedido
 from revgas_chatbot.vendas.registro import PedidoInvalido, RegistradorDeVendas, VendaCriada
-from revgas_chatbot.vendas.venda import marca, montar_corpo_venda, reais
+from revgas_chatbot.vendas.venda import CANAL, marca, montar_corpo_venda, reais
 
 PRODUTO = 26717
 QUANTIDADE = 2
@@ -300,6 +302,57 @@ def _id_positivo(texto: str) -> int:
     return int(texto)
 
 
+def _cliente_demo(ambiente: Mapping[str, str]) -> int:
+    bruto = (ambiente.get("REVGAS_CLIENTE_DEMO") or "").strip()
+    if not bruto.isdigit() or int(bruto) <= 0:
+        raise SystemExit("falta no .env: REVGAS_CLIENTE_DEMO (o cliente de demonstração, ex.: 5700355)")
+    return int(bruto)
+
+
+def _vendas_abertas_da_demo(api: Any, relogio: Relogio, cliente: int) -> list[dict] | None:
+    """Vendas do NOSSO cliente fixo, com a NOSSA marca, que não estão canceladas.
+
+    Confere cliente e marca de novo em cada venda: se a API ignorar algum
+    filtro, venda de outro aluno nunca entra na lista. None = não deu para listar.
+    """
+    hoje = relogio.agora().date()
+    cadenciada = ApiCadenciada(api, relogio)  # 1 req/s nas listagens
+    abertas: list[dict] = []
+    for pagina in range(1, 51):  # limite de segurança
+        resposta = cadenciada.buscar_vendas(
+            customer_id=cliente, channel=CANAL, de=hoje - timedelta(days=1), ate=hoje + timedelta(days=1), pagina=pagina
+        )
+        if resposta.status != 200 or not isinstance(resposta.dados, dict):
+            return None
+        for venda in resposta.dados.get("data") or []:
+            if (
+                venda.get("customer_id") == cliente
+                and "[chatbot:" in (venda.get("observation") or "")
+                and venda.get("status") != "CANCEL"
+            ):
+                abertas.append(venda)
+        if not (resposta.dados.get("pagination") or {}).get("has_next"):
+            break
+    return abertas
+
+
+def _cancelar_demo(api: Any, relogio: Relogio, perguntar: Perguntar, escrever: Escrever, cliente: int) -> None:
+    """M5 (10.6): cancela, uma a uma e com "sim", as vendas abertas da demonstração."""
+    abertas = _vendas_abertas_da_demo(api, relogio, cliente)
+    if abertas is None:
+        escrever("Não consegui listar as vendas. Nada foi cancelado.")
+        return
+    if not abertas:
+        escrever("Nenhuma venda da demonstração aberta.")
+        return
+    escrever(f"{len(abertas)} venda(s) da demonstração abertas:")
+    for venda in abertas:
+        total = reais(Decimal(str(venda.get("total", 0))))
+        escrever(f"- venda {venda['id']}: {venda.get('status')}, {total}, criada em {venda.get('created_at')}")
+        relogio.dormir(1.0)  # o cancelamento não passa pela ApiCadenciada: espera 1 s
+        _cancelar(api, venda["id"], perguntar, escrever)
+
+
 def rodar(
     argv: list[str] | None,
     *,
@@ -308,11 +361,14 @@ def rodar(
     perguntar: Perguntar,
     ler_segredo: Perguntar,
     escrever: Escrever,
+    ambiente: Mapping[str, str] | None = None,
 ) -> None:
     parser = argparse.ArgumentParser(description="Venda de teste na API real (só com o seu OK a cada envio)")
     modo = parser.add_mutually_exclusive_group(required=True)
     modo.add_argument("--broadcast", choices=[BROADCAST], help="sempre NONE: não notificar entregadores (D11)")
     modo.add_argument("--sem-cliente", action="store_true", help="venda sem customer_id, sem telefone (D12)")
+    modo.add_argument("--cancelar-demo", action="store_true",
+                      help="cancela as vendas abertas da demonstração (cliente REVGAS_CLIENTE_DEMO), uma a uma")
     modo.add_argument("--customer-id", type=_id_positivo, metavar="N", help="venda com o cliente N (D13)")
     modo.add_argument("--cancelar", type=int, metavar="ID", help="só tentar cancelar a venda ID")
     parser.add_argument(
@@ -333,6 +389,9 @@ def rodar(
 
     if argumentos.cancelar is not None:
         _cancelar(api, argumentos.cancelar, perguntar, escrever)
+        return
+    if argumentos.cancelar_demo:
+        _cancelar_demo(api, relogio, perguntar, escrever, _cliente_demo(ambiente or {}))
         return
     if argumentos.sem_cliente or argumentos.customer_id is not None:
         broadcast = AVISAR_ENTREGADORES if argumentos.avisar_entregadores else BROADCAST
@@ -406,7 +465,8 @@ def main(argv: list[str] | None = None) -> None:
     if not url.startswith("https://"):
         raise SystemExit("REVGAS_API_URL precisa começar com https:// (rode com --env-file .env)")
     api = ApiRevGasHttp(url, os.environ.get("REVGAS_API_KEY", ""))
-    rodar(argv, api=api, relogio=RelogioDoSistema(), perguntar=input, ler_segredo=getpass.getpass, escrever=print)
+    rodar(argv, api=api, relogio=RelogioDoSistema(), perguntar=input, ler_segredo=getpass.getpass, escrever=print,
+          ambiente=os.environ)
 
 
 if __name__ == "__main__":

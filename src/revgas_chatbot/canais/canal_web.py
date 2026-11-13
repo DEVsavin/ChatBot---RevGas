@@ -9,8 +9,10 @@ mesmo do terminal). Regras do canal (`.scratch/canal/spec.md`):
 - `POST` só com `Content-Type: application/json` (um formulário de outro
   site não consegue enviar sem a permissão do navegador);
 - uma mensagem de cada vez (um cadeado em volta da conversa);
-- número fictício (DDD 00) = número do canal, com IA; qualquer outro =
-  número digitado (não revela o cadastro) e SEM a IA da cota grátis;
+- número fictício (DDD 00) = número do canal; qualquer outro = número
+  digitado (não revela o cadastro);
+- IA da cota grátis só para números fictícios ou da equipe (W2, D17b);
+- venda real (M5) só com `--venda-real`: a página avisa;
 - nenhum texto do cliente vai para o log.
 """
 
@@ -28,7 +30,7 @@ from pydantic import BaseModel
 
 from revgas_chatbot.conversa.conversa import Conversa
 from revgas_chatbot.conversa.entrada import numero_ficticio, telefone
-from revgas_chatbot.montagem import Programa, montar
+from revgas_chatbot.montagem import AVISO_VENDA_REAL, ConfiguracaoInvalida, Programa, montar_do_ambiente
 
 PORTA = 8000  # W-D1
 MAX_MENSAGEM = 500  # W-D2
@@ -37,7 +39,8 @@ HOST = "127.0.0.1"  # só esta máquina; não há opção para mudar (CN-3, CN-4
 PAGINA_DO_CHAT = (Path(__file__).with_name("pagina_chat.html")).read_text(encoding="utf-8")
 
 AVISO_SEM_IA = (
-    "IA desligada para este número: na demonstração, a IA só funciona com os números fictícios."
+    "IA desligada para este número: na demonstração, a IA só funciona com os números fictícios "
+    "e os da equipe."
 )
 
 
@@ -87,17 +90,21 @@ def criar_app(programa: Programa, *, porta: int = PORTA, pasta_dados: Path = Pat
         if numero is None:
             return _erro(400, "Número inválido. Use DDD e número, ex.: (00) 90000-0001.")
         ficticio = numero_ficticio(numero)
-        com_ia = programa.ia_ligada and ficticio
+        com_ia = programa.ia_ligada and programa.ia_permitida(numero)
         conversa = programa(numero, numero_confiavel=ficticio, com_ia=com_ia)
         with cadeado:
             mensagens = conversa.iniciar()
         sessao = secrets.token_urlsafe(24)  # 192 bits aleatórios: não dá para adivinhar
         sessoes[sessao] = conversa
+        avisos = [AVISO_VENDA_REAL] if programa.venda_real else []
+        if programa.ia_ligada and not com_ia:
+            avisos.append(AVISO_SEM_IA)
         return {
             "sessao": sessao,
             "mensagens": mensagens,
             "ia_ligada": com_ia,
-            "aviso": AVISO_SEM_IA if programa.ia_ligada and not com_ia else None,
+            "venda_real": programa.venda_real,
+            "aviso": " ".join(avisos) or None,
         }
 
     @app.post("/conversas/{sessao}/mensagens")
@@ -123,14 +130,24 @@ def main(
     """Liga o chat web em http://127.0.0.1:<porta> (só nesta máquina)."""
     parser = argparse.ArgumentParser(description="Chat web de teste (só nesta máquina)")
     parser.add_argument("--porta", type=int, default=PORTA, help=f"porta (padrão {PORTA})")
+    parser.add_argument("--venda-real", action="store_true",
+                        help="cria vendas DE VERDADE no estabelecimento 2580 (só o usuário liga; M5)")
     argumentos = parser.parse_args(argv)
 
     if rodar is None:
         import uvicorn
 
         rodar = uvicorn.run
-    programa = montar(pasta_dados, ambiente=ambiente)
+    import os
+
+    ambiente = os.environ if ambiente is None else ambiente
+    try:
+        programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real)
+    except ConfiguracaoInvalida as erro:
+        raise SystemExit(f"Chat web não iniciou: {erro}") from None
     app = criar_app(programa, porta=argumentos.porta, pasta_dados=pasta_dados)
+    if programa.venda_real:
+        print(f"*** {AVISO_VENDA_REAL} ***", flush=True)
     print(f"Chat de teste em http://{HOST}:{argumentos.porta}  (Ctrl+C para parar)", flush=True)
     # access_log=False: o caminho das mensagens tem o identificador da sessão.
     rodar(app, host=HOST, port=argumentos.porta, access_log=False)

@@ -6,6 +6,8 @@ Para ligar a IA (Gemini, cota grátis), rode com a chave no ambiente:
 
     uv run --env-file .env python -m revgas_chatbot.canais.chat_terminal --telefone 5500900000001
 
+Venda real (M5, só o usuário liga): acrescente `--venda-real`.
+
 O telefone simula o número que o WhatsApp entregaria. A fila de
 atendimento e a página `fila.html` ficam em `dados/` (fora do git).
 Ctrl+D (ou Ctrl+C) sai do chat.
@@ -14,13 +16,21 @@ Ctrl+D (ou Ctrl+C) sai do chat.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Mapping, TextIO
 
 from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio
 from revgas_chatbot.conversa.entrada import telefone
-from revgas_chatbot.montagem import montar
+from revgas_chatbot.montagem import (
+    AVISO_VENDA_REAL,
+    ConfiguracaoInvalida,
+    config_venda_real,
+    montar,
+    numeros_da_equipe,
+    regra_da_ia,
+)
 
 
 def _ler(entrada: TextIO, saida: TextIO, rotulo: str) -> str | None:
@@ -45,7 +55,15 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(description="Chat de teste do atendimento")
     parser.add_argument("--telefone", help="número simulado do WhatsApp, ex.: 5500900000001")
+    parser.add_argument("--venda-real", action="store_true",
+                        help="cria vendas DE VERDADE no estabelecimento 2580 (só o usuário liga; M5)")
     argumentos = parser.parse_args(argv)
+    ambiente = os.environ if ambiente is None else ambiente
+    try:
+        config = config_venda_real(ambiente) if argumentos.venda_real else None
+        regra = regra_da_ia(numeros_da_equipe(ambiente))
+    except ConfiguracaoInvalida as erro:
+        raise SystemExit(f"Chat não iniciou: {erro}") from None
 
     numero = telefone(argumentos.telefone) if argumentos.telefone else None
     while numero is None:
@@ -56,9 +74,11 @@ def main(
         if numero is None:
             saida.write("Número inválido. Use DDD e número, ex.: (00) 90000-0001.\n")
 
-    programa = montar(pasta_dados, relogio=relogio, api=api, ambiente=ambiente)
+    programa = montar(pasta_dados, relogio=relogio, api=api, ambiente=ambiente, venda_real=config, ia_permitida=regra)
     conversa = programa(numero)
     saida.write("(Chat de teste. Ctrl+D para sair.)\n")
+    if programa.venda_real:
+        saida.write(f"*** {AVISO_VENDA_REAL} ***\n")
     if programa.ia_ligada:
         saida.write("(IA ligada: Gemini, cota grátis. Use só os clientes fictícios.)\n")
     else:

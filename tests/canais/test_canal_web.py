@@ -245,3 +245,112 @@ def test_comando_aceita_outra_porta_mas_nunca_outro_endereco(tmp_path):
 
     with pytest.raises(SystemExit):
         main(["--host", "0.0.0.0"], rodar=lambda app, **opcoes: None, pasta_dados=tmp_path, ambiente={})
+
+
+# --- M5 (D16/D17): venda real ligada só com --venda-real --------------------------------
+
+from revgas_chatbot.montagem import ConfigVendaReal, regra_da_ia  # noqa: E402
+
+EQUIPE = "(86) 99999-1111"  # inventado
+CONFIG_REAL = ConfigVendaReal(url="https://api.exemplo.test/v1", chave="chave-ficticia", cliente_demo=5700355)
+AMBIENTE_REAL = {
+    "REVGAS_API_KEY": "chave-ficticia",
+    "REVGAS_API_URL": "https://api.exemplo.test/v1",
+    "REVGAS_CLIENTE_DEMO": "5700355",
+}
+
+
+@pytest.fixture
+def real(tmp_path, api, ia):
+    # Modo real com a API falsa no lugar da RevGás (nenhuma chamada sai daqui).
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia,
+                      venda_real=CONFIG_REAL, ia_permitida=regra_da_ia([EQUIPE]))
+    return TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
+
+
+def test_modo_real_avisa_na_resposta(real):
+    inicio = iniciar(real)
+
+    assert inicio["venda_real"] is True
+    assert "VENDA REAL LIGADA" in inicio["aviso"]
+
+
+def test_sem_modo_real_nao_avisa(cliente):
+    inicio = iniciar(cliente)
+
+    assert inicio["venda_real"] is False
+    assert not inicio["aviso"]
+
+
+def test_modo_real_nao_busca_cadastro_e_pede_o_nome(real, api):
+    sessao = iniciar(real)["sessao"]
+
+    assert "Qual é o seu nome?" in enviar(real, sessao, "sim")
+    assert api.operacoes == []
+
+
+def test_modo_real_pedido_completo_usa_o_cliente_fixo(real, api):
+    sessao = iniciar(real)["sessao"]
+    for texto in ("sim", "Fulano", "1", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1"):
+        enviar(real, sessao, texto)
+    resposta = enviar(real, sessao, "1")
+
+    assert resposta.startswith("Pedido registrado!"), resposta
+    assert api.operacoes == ["criar_venda"]  # nenhuma busca nem cadastro de cliente
+    [venda] = api.vendas_criadas()
+    assert venda["customer_id"] == 5700355
+    assert venda["broadcast"] == "NONE"
+    assert venda["observation"].startswith("DEMONSTRAÇÃO DO CHATBOT - NÃO ENTREGAR.")
+    assert "Fulano" not in venda["observation"]
+
+
+def test_modo_real_uma_so_api_cadenciada(tmp_path, api):
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, venda_real=CONFIG_REAL)
+
+    assert programa.dependencias.api is programa.dependencias.registrador._api
+
+
+@pytest.mark.parametrize("numero, usa_ia", [(EQUIPE, True), ("(86) 9999-1111", True), (MARIA, True), (REAL, False)])
+def test_modo_real_ia_so_para_a_equipe(real, ia, numero, usa_ia):
+    # D17b: fictício ou equipe (com ou sem o 9); outro número, só roteiro.
+    inicio = iniciar(real, numero)
+    assert inicio["ia_ligada"] is usa_ia
+    enviar(real, inicio["sessao"], "sim")
+    enviar(real, inicio["sessao"], "Fulano")
+    enviar(real, inicio["sessao"], "quero 2 botijões, por favor")
+
+    assert ("quero 2 botijões, por favor" in [t for t, _ in ia.recebidos]) is usa_ia
+
+
+def test_comando_com_venda_real_liga_e_avisa(tmp_path, capsys):
+    chamadas = []
+    main(["--venda-real"], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
+
+    assert len(chamadas) == 1
+    saida = capsys.readouterr().out
+    assert "VENDA REAL LIGADA" in saida
+    assert "chave-ficticia" not in saida
+
+
+def test_comando_sem_venda_real_nao_liga_mesmo_com_o_env(tmp_path, capsys):
+    main([], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
+
+    assert "VENDA REAL" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mudanca, nome", [
+    ({"REVGAS_API_KEY": ""}, "REVGAS_API_KEY"),
+    ({"REVGAS_API_URL": "http://api.exemplo.test/v1"}, "REVGAS_API_URL"),
+    ({"REVGAS_CLIENTE_DEMO": ""}, "REVGAS_CLIENTE_DEMO"),
+    ({"REVGAS_CLIENTE_DEMO": "0"}, "REVGAS_CLIENTE_DEMO"),
+    ({"REVGAS_CLIENTE_DEMO": "abc"}, "REVGAS_CLIENTE_DEMO"),
+])
+def test_comando_com_venda_real_e_configuracao_errada_nao_liga(tmp_path, mudanca, nome):
+    chamadas = []
+    with pytest.raises(SystemExit) as erro:
+        main(["--venda-real"], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path,
+             ambiente={**AMBIENTE_REAL, **mudanca})
+
+    assert chamadas == []
+    assert nome in str(erro.value)
+    assert "chave-ficticia" not in str(erro.value)

@@ -124,3 +124,30 @@ def test_ia_da_cota_gratis_com_api_de_verdade_nao_inicia(tmp_path):
 
 def test_api_de_verdade_sem_chave_da_ia_inicia_normalmente(tmp_path):
     montar(tmp_path, api=_ApiDeVerdade(), ambiente={})
+
+
+# --- M5: --venda-real também no terminal --------------------------------------------------
+
+AMBIENTE_REAL = {"REVGAS_API_KEY": "chave-ficticia", "REVGAS_API_URL": "https://api.exemplo.test/v1",
+                 "REVGAS_CLIENTE_DEMO": "5700355"}
+
+
+def test_terminal_com_venda_real_avisa_e_nao_busca_cadastro(tmp_path):
+    relogio = RelogioFalso(datetime(2026, 11, 13, 15, 0, tzinfo=FUSO_TERESINA))
+    api = api_de_demonstracao(relogio)  # no lugar da RevGás: nada sai daqui
+    saida = io.StringIO()
+    main(["--venda-real", "--telefone", MARIA], io.StringIO("sim\n"), saida, relogio=relogio, api=api,
+         pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
+
+    texto = saida.getvalue()
+    assert "VENDA REAL LIGADA" in texto
+    assert "Qual é o seu nome?" in texto and "Maria" not in texto
+    assert api.operacoes == []
+    assert "chave-ficticia" not in texto
+
+
+def test_terminal_venda_real_sem_configuracao_nao_inicia(tmp_path):
+    with pytest.raises(SystemExit) as erro:
+        rodar(["--venda-real", "--telefone", MARIA], "sim\n", tmp_path)
+
+    assert "REVGAS_API_KEY" in str(erro.value)

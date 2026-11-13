@@ -11,7 +11,7 @@ em `api` a mesma `ApiCadenciada` usada por eles.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -46,6 +46,22 @@ class EmAndamento:
 
 
 Resultado = VendaCriada | PedidoInvalido | TransferirAtendente | EmAndamento
+
+
+@dataclass(frozen=True)
+class VendaReal:
+    """Opções do modo real (M5, D16) enquanto `/customers` der 403.
+
+    Toda venda usa o cliente de demonstração fixo (sem buscar nem cadastrar
+    cliente), não avisa entregadores, leva o ponto genérico do centro de
+    Teresina (como a venda 30811219) e uma observação mínima, sem nome nem
+    telefone de quem conversa (a venda é legível para a turma no 2580).
+    """
+
+    cliente_fixo: int
+    broadcast: str = "NONE"
+    coordenadas: tuple[float, float] = (-5.0892, -42.8016)
+    aviso: str = "DEMONSTRAÇÃO DO CHATBOT - NÃO ENTREGAR."
 
 _PROCESSANDO = object()
 
@@ -130,8 +146,10 @@ class RegistradorDeVendas:
         catalogo: dict[int, ProdutoCatalogo],
         pagamentos_permitidos: set[str],
         establishment_id: int,
+        venda_real: VendaReal | None = None,
     ) -> None:
         self._api = api if isinstance(api, ApiCadenciada) else ApiCadenciada(api, relogio)
+        self._venda_real = venda_real
         self._relogio = relogio
         self._catalogo = catalogo
         self._pagamentos_permitidos = pagamentos_permitidos
@@ -179,12 +197,16 @@ class RegistradorDeVendas:
 
         try:
             customer_id = self._garantir_cliente(pedido)
+            real = self._venda_real
             corpo = montar_corpo_venda(
-                pedido,
+                # Modo real: a observação vira só o aviso (+ troco + marca, que a montagem põe).
+                pedido if real is None else replace(pedido, observacao=real.aviso),
                 customer_id=customer_id,
                 catalogo=self._catalogo,
                 establishment_id=self._establishment_id,
             )
+            if real is not None:
+                corpo.update(broadcast=real.broadcast, lat=real.coordenadas[0], lon=real.coordenadas[1])
             enviado_em = self._relogio.agora()
             self._venda_enviada.add(pedido.pedido_id)
             try:
@@ -242,6 +264,8 @@ class RegistradorDeVendas:
             pagina += 1
 
     def _garantir_cliente(self, pedido: Pedido) -> int:
+        if self._venda_real is not None:
+            return self._venda_real.cliente_fixo  # D16: /customers dá 403 para a nossa chave
         clientes = self._buscar_clientes(pedido)
         if len(clientes) > 1:
             raise _Parar(TransferirAtendente("mais de um cliente com o mesmo telefone", pedido.pedido_id))

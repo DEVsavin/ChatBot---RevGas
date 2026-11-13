@@ -34,11 +34,17 @@ from typing import Any, Callable, Iterator, Mapping, Protocol
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
-from revgas_chatbot.conversa.entrada import comando, numero_ficticio, telefone
+from revgas_chatbot.conversa.entrada import comando, telefone
+from revgas_chatbot.montagem import (  # noqa: F401 - regra_da_ia e ConfiguracaoInvalida também são usadas de fora
+    AVISO_VENDA_REAL,
+    ConfiguracaoInvalida,
+    montar_do_ambiente,
+    numeros_da_equipe,
+    regra_da_ia,
+)
 
 HOST = "127.0.0.1"  # só esta máquina; o ngrok leva o tráfego até aqui (W5)
 MAX_MENSAGEM = 500  # mesmo limite da web
-MAX_EQUIPE = 5  # destinatários de teste da Meta (W12)
 MIN_VERIFY_TOKEN = 32
 
 NAO_TEXTO = "Por enquanto só entendo mensagens de texto."
@@ -274,34 +280,7 @@ class AtendimentoWhatsApp:
                 return  # a ordem importa: sem esta, as seguintes não fazem sentido
 
 
-# --- IA só para a equipe (W2) ----------------------------------------------------------------
-
-
-def _mesmo_celular(numero: str) -> str:
-    """55 + DDD + os últimos 8 dígitos: iguala as formas com e sem o 9."""
-    return numero[:4] + numero[-8:]
-
-
-def regra_da_ia(numeros_equipe: list[str] | tuple[str, ...]) -> Callable[[str], bool]:
-    """IA permitida para números fictícios (DDD 00) ou da equipe (com ou sem o 9)."""
-    equipe = set()
-    for bruto in numeros_equipe:
-        numero = telefone(bruto)
-        if numero is None:
-            raise ValueError("número inválido na lista da equipe")
-        equipe.add(_mesmo_celular(numero))
-
-    def permitida(numero: str) -> bool:
-        return numero_ficticio(numero) or _mesmo_celular(numero) in equipe
-
-    return permitida
-
-
 # --- configuração e comando ------------------------------------------------------------------
-
-
-class ConfiguracaoInvalida(ValueError):
-    """Mensagem com o NOME da variável, nunca o valor."""
 
 
 @dataclass(frozen=True)
@@ -331,12 +310,9 @@ def configuracao(ambiente: Mapping[str, str]) -> Configuracao:
         raise ConfiguracaoInvalida("faltam no .env: " + ", ".join(faltam))
     if len(valores["WHATSAPP_VERIFY_TOKEN"]) < MIN_VERIFY_TOKEN:
         raise ConfiguracaoInvalida(f"WHATSAPP_VERIFY_TOKEN precisa ter pelo menos {MIN_VERIFY_TOKEN} caracteres")
-    brutos = [n for n in valores["WHATSAPP_NUMEROS_EQUIPE"].split(",") if n.strip()]
-    numeros = tuple(telefone(n) for n in brutos)
-    if not numeros or len(numeros) > MAX_EQUIPE or None in numeros:
-        raise ConfiguracaoInvalida(
-            f"WHATSAPP_NUMEROS_EQUIPE: de 1 a {MAX_EQUIPE} telefones com DDD, separados por vírgula"
-        )
+    numeros = numeros_da_equipe(ambiente)  # inválido → ConfiguracaoInvalida com o nome
+    if not numeros:
+        raise ConfiguracaoInvalida("faltam no .env: WHATSAPP_NUMEROS_EQUIPE")
     dominio = valores["WHATSAPP_DOMINIO"]
     if "/" in dominio or ":" in dominio:
         raise ConfiguracaoInvalida("WHATSAPP_DOMINIO: só o domínio, sem https:// e sem barra")
@@ -361,15 +337,17 @@ def main(
     import os
 
     from revgas_chatbot.canais.enviador_whatsapp import EnviadorWhatsApp
-    from revgas_chatbot.montagem import montar
 
     parser = argparse.ArgumentParser(description="Webhook do WhatsApp (só nesta máquina; o ngrok expõe)")
     parser.add_argument("--porta", type=int, default=PORTA, help=f"porta (padrão {PORTA})")
+    parser.add_argument("--venda-real", action="store_true",
+                        help="cria vendas DE VERDADE no estabelecimento 2580 (só o usuário liga; M5)")
     argumentos = parser.parse_args(argv)
 
     ambiente = os.environ if ambiente is None else ambiente
     try:
         config = configuracao(ambiente)
+        programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real)
     except ConfiguracaoInvalida as erro:
         raise SystemExit(f"WhatsApp não iniciou: {erro}") from None
     if rodar is None:
@@ -377,7 +355,6 @@ def main(
 
         rodar = uvicorn.run
 
-    programa = montar(pasta_dados, ambiente=ambiente, ia_permitida=regra_da_ia(config.numeros_equipe))
     atendimento = AtendimentoWhatsApp(
         lambda tel: programa(tel, numero_confiavel=True),  # W4: o número vem da Meta
         EnviadorWhatsApp(config.token, config.phone_number_id),
@@ -396,6 +373,8 @@ def main(
         flush=True,
     )
     print("IA: " + ("ligada só para os números da equipe" if programa.ia_ligada else "desligada"), flush=True)
+    if programa.venda_real:
+        print(f"*** {AVISO_VENDA_REAL} ***", flush=True)
     atendimento.ligar()
     try:
         # access_log=False: nada de caminhos e endereços no log (W10).
