@@ -13,13 +13,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_revgas.api_falsa import ApiRevGasFalsa
 from revgas_chatbot.config import carregar_catalogo, carregar_pagamentos
 from revgas_chatbot.conversa.conversa import Conversa, Dependencias
+from revgas_chatbot.conversa.entrada import numero_ficticio
 from revgas_chatbot.atendimento.fila import FilaDeAtendimento
 from revgas_chatbot.ia.interpretacao import Interpretador
 from revgas_chatbot.ia.interpretador_gemini import InterpretadorGemini
@@ -83,6 +84,7 @@ def montar(
     pasta_config: Path = PASTA_CONFIG,
     ambiente: Mapping[str, str] | None = None,
     interpretador: Interpretador | None = None,  # testes: a IA falsa; senão, decide pelo ambiente
+    ia_permitida: Callable[[str], bool] = numero_ficticio,  # WhatsApp: fictício ou equipe (W2)
 ) -> Programa:
     """Liga as peças e devolve o programa.
 
@@ -113,8 +115,9 @@ def montar(
         pagamentos=pagamentos,
         seguranca=seguranca,
         interpretador=interpretador,
-        # Toda IA deste programa é a da cota grátis: só com números fictícios (C2-1, H3).
-        ia_so_com_numero_ficticio=interpretador is not None,
+        # Toda IA deste programa é a da cota grátis: só para os telefones da regra
+        # (padrão: fictícios; C2-1, H3, W2).
+        ia_permitida=ia_permitida,
     )
     return Programa(dependencias=dependencias, ia_ligada=interpretador is not None)
 

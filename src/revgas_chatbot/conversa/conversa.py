@@ -14,6 +14,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Callable
 
 from revgas_chatbot.api_revgas.api import TempoEsgotado
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
@@ -21,7 +22,6 @@ from revgas_chatbot.conversa.entrada import (
     comando,
     normalizar,
     numero_do_endereco,
-    numero_ficticio,
     opcao,
     pergunta_ou_nao_sei,
     sim_ou_nao,
@@ -111,8 +111,9 @@ class Dependencias:
     pagamentos: set[str]
     seguranca: str  # orientações para vazamento (config/seguranca.txt)
     interpretador: Interpretador | None = None  # IA (C2); None = só o roteiro do C1
-    # Cota grátis (H3): a IA só vale enquanto o telefone ATUAL da conversa for fictício.
-    ia_so_com_numero_ficticio: bool = False
+    # Cota grátis (H3): a IA só vale enquanto o telefone ATUAL da conversa passar nesta regra
+    # (web: só fictício; WhatsApp: fictício ou da equipe). None = sem restrição (testes).
+    ia_permitida: Callable[[str], bool] | None = None
 
 
 class Conversa:
@@ -150,6 +151,10 @@ class Conversa:
         self._pedido_id = str(uuid.uuid4())
 
     # --- interface -------------------------------------------------------------
+
+    @property
+    def encerrada(self) -> bool:
+        return self._passo == "ENCERRADA"
 
     def iniciar(self) -> list[str]:
         return [
@@ -477,8 +482,8 @@ class Conversa:
         """
         if self._d.interpretador is None:
             return None
-        if self._d.ia_so_com_numero_ficticio and not numero_ficticio(self._telefone):
-            return None  # H3: cliente trocou para um número real → nada vai à IA grátis
+        if self._d.ia_permitida is not None and not self._d.ia_permitida(self._telefone):
+            return None  # H3: telefone atual fora da regra → nada vai à IA grátis
         contexto = Contexto(
             passo=self._passo,
             produtos=tuple(p.nome for _, p in self._produtos),

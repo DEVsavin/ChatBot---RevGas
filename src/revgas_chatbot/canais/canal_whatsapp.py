@@ -10,23 +10,42 @@ Antes de ler qualquer coisa do corpo, o `POST /webhook` confere:
 3. a assinatura `X-Hub-Signature-256` (HMAC-SHA256 do corpo cru com o
    segredo do app, comparada em tempo constante).
 Só então separa as mensagens e entrega cada uma, uma vez só (W7), a
-`receber`. Nada do conteúdo vai para o log.
+`receber`, que só enfileira. O `AtendimentoWhatsApp` atende a fila num
+único trabalhador, na ordem (S5, W8): conversa → respostas → envio.
+Nada do conteúdo vai para o log.
+
+    uv run --env-file .env python -m revgas_chatbot.canais.canal_whatsapp
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import hmac
 import json
+import logging
+import queue
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Iterator, Mapping, Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
-from revgas_chatbot.conversa.entrada import telefone
+from revgas_chatbot.conversa.entrada import comando, numero_ficticio, telefone
+
+HOST = "127.0.0.1"  # só esta máquina; o ngrok leva o tráfego até aqui (W5)
+MAX_MENSAGEM = 500  # mesmo limite da web
+MAX_EQUIPE = 5  # destinatários de teste da Meta (W12)
+MIN_VERIFY_TOKEN = 32
+
+NAO_TEXTO = "Por enquanto só entendo mensagens de texto."
+LONGA = "Sua mensagem ficou longa demais. Pode resumir em até 500 caracteres?"
+PROBLEMA = "Tive um problema aqui. Pode mandar de novo?"
+
+_log = logging.getLogger(__name__)
 
 PORTA = 8001  # WA-D1 (a 8000 é do chat web)
 MAX_CORPO = 256 * 1024  # bytes
@@ -163,3 +182,227 @@ def criar_app_whatsapp(
         return Response(status_code=200)
 
     return app
+
+
+# --- atendimento: um trabalhador, uma mensagem por vez -------------------------------------
+
+
+class Enviador(Protocol):
+    def enviar(self, para: str, texto: str) -> bool: ...
+
+
+class _Conversa(Protocol):
+    encerrada: bool
+
+    def iniciar(self) -> list[str]: ...
+
+    def responder(self, texto: str) -> list[str]: ...
+
+
+_PARAR = object()
+
+
+class AtendimentoWhatsApp:
+    """Atende as mensagens recebidas, uma de cada vez, na ordem de chegada."""
+
+    def __init__(self, criar_conversa: Callable[[str], _Conversa], enviador: Enviador) -> None:
+        self._criar_conversa = criar_conversa
+        self._enviador = enviador
+        self._fila: queue.Queue = queue.Queue()
+        self._conversas: dict[str, _Conversa] = {}  # W8: uma por telefone
+        self._trabalhador: threading.Thread | None = None
+
+    def receber(self, mensagem: MensagemRecebida) -> None:
+        """Chamado pela rota do webhook: só enfileira (rápido e sem exceção)."""
+        self._fila.put_nowait(mensagem)
+
+    def ligar(self) -> None:
+        self._trabalhador = threading.Thread(target=self._trabalhar, name="whatsapp", daemon=True)
+        self._trabalhador.start()
+
+    def desligar(self) -> None:
+        if self._trabalhador is not None:
+            self._fila.put_nowait(_PARAR)
+            self._trabalhador.join()
+            self._trabalhador = None
+
+    def esperar(self, limite: float = 5.0) -> None:
+        """Espera a fila esvaziar (testes). Trabalhador parado → erro em vez de travar."""
+        terminou = self._fila.all_tasks_done
+        with terminou:
+            if not terminou.wait_for(lambda: self._fila.unfinished_tasks == 0, timeout=limite):
+                raise TimeoutError("o atendimento do WhatsApp não terminou")
+
+    def _trabalhar(self) -> None:
+        while True:
+            mensagem = self._fila.get()
+            try:
+                if mensagem is _PARAR:
+                    return
+                self._atender(mensagem)
+            except Exception as erro:  # noqa: BLE001 - I3: o trabalhador nunca morre
+                _log.error("falha ao atender uma mensagem do WhatsApp: %s", type(erro).__name__)
+                try:
+                    self._enviador.enviar(mensagem.telefone, PROBLEMA)
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                self._fila.task_done()
+
+    def _atender(self, m: MensagemRecebida) -> None:
+        if m.texto is None:
+            self._enviar(m.telefone, [NAO_TEXTO])  # W9
+            return
+        if len(m.texto) > MAX_MENSAGEM:
+            self._enviar(m.telefone, [LONGA])
+            return
+        conversa = self._conversas.get(m.telefone)
+        if conversa is None or conversa.encerrada:
+            conversa = self._criar_conversa(m.telefone)
+            respostas = conversa.iniciar()
+            self._conversas[m.telefone] = conversa
+            # I1: vazamento ou pedido de atendente logo na primeira mensagem → atende já.
+            if comando(m.texto, livre=False) in ("VAZAMENTO", "ATENDENTE"):
+                respostas = conversa.responder(m.texto)
+        else:
+            respostas = conversa.responder(m.texto)
+        self._enviar(m.telefone, respostas)
+
+    def _enviar(self, para: str, respostas: list[str]) -> None:
+        for texto in respostas:
+            if not self._enviador.enviar(para, texto):
+                return  # a ordem importa: sem esta, as seguintes não fazem sentido
+
+
+# --- IA só para a equipe (W2) ----------------------------------------------------------------
+
+
+def _mesmo_celular(numero: str) -> str:
+    """55 + DDD + os últimos 8 dígitos: iguala as formas com e sem o 9."""
+    return numero[:4] + numero[-8:]
+
+
+def regra_da_ia(numeros_equipe: list[str] | tuple[str, ...]) -> Callable[[str], bool]:
+    """IA permitida para números fictícios (DDD 00) ou da equipe (com ou sem o 9)."""
+    equipe = set()
+    for bruto in numeros_equipe:
+        numero = telefone(bruto)
+        if numero is None:
+            raise ValueError("número inválido na lista da equipe")
+        equipe.add(_mesmo_celular(numero))
+
+    def permitida(numero: str) -> bool:
+        return numero_ficticio(numero) or _mesmo_celular(numero) in equipe
+
+    return permitida
+
+
+# --- configuração e comando ------------------------------------------------------------------
+
+
+class ConfiguracaoInvalida(ValueError):
+    """Mensagem com o NOME da variável, nunca o valor."""
+
+
+@dataclass(frozen=True)
+class Configuracao:
+    token: str = field(repr=False)
+    phone_number_id: str
+    app_secret: str = field(repr=False)
+    verify_token: str = field(repr=False)
+    numeros_equipe: tuple[str, ...] = field(repr=False)
+    dominio: str
+
+
+_OBRIGATORIAS = (
+    "WHATSAPP_TOKEN",
+    "WHATSAPP_PHONE_NUMBER_ID",
+    "WHATSAPP_APP_SECRET",
+    "WHATSAPP_VERIFY_TOKEN",
+    "WHATSAPP_NUMEROS_EQUIPE",
+    "WHATSAPP_DOMINIO",
+)
+
+
+def configuracao(ambiente: Mapping[str, str]) -> Configuracao:
+    valores = {nome: (ambiente.get(nome) or "").strip() for nome in _OBRIGATORIAS}
+    faltam = [nome for nome, valor in valores.items() if not valor]
+    if faltam:
+        raise ConfiguracaoInvalida("faltam no .env: " + ", ".join(faltam))
+    if len(valores["WHATSAPP_VERIFY_TOKEN"]) < MIN_VERIFY_TOKEN:
+        raise ConfiguracaoInvalida(f"WHATSAPP_VERIFY_TOKEN precisa ter pelo menos {MIN_VERIFY_TOKEN} caracteres")
+    brutos = [n for n in valores["WHATSAPP_NUMEROS_EQUIPE"].split(",") if n.strip()]
+    numeros = tuple(telefone(n) for n in brutos)
+    if not numeros or len(numeros) > MAX_EQUIPE or None in numeros:
+        raise ConfiguracaoInvalida(
+            f"WHATSAPP_NUMEROS_EQUIPE: de 1 a {MAX_EQUIPE} telefones com DDD, separados por vírgula"
+        )
+    dominio = valores["WHATSAPP_DOMINIO"]
+    if "/" in dominio or ":" in dominio:
+        raise ConfiguracaoInvalida("WHATSAPP_DOMINIO: só o domínio, sem https:// e sem barra")
+    return Configuracao(
+        token=valores["WHATSAPP_TOKEN"],
+        phone_number_id=valores["WHATSAPP_PHONE_NUMBER_ID"],
+        app_secret=valores["WHATSAPP_APP_SECRET"],
+        verify_token=valores["WHATSAPP_VERIFY_TOKEN"],
+        numeros_equipe=numeros,  # type: ignore[arg-type]
+        dominio=dominio,
+    )
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    rodar: Callable[..., None] | None = None,  # testes: um falso no lugar do uvicorn
+    pasta_dados: Path = Path("dados"),
+    ambiente: Mapping[str, str] | None = None,
+) -> None:
+    """Liga o webhook do WhatsApp em http://127.0.0.1:<porta>/webhook."""
+    import os
+
+    from revgas_chatbot.canais.enviador_whatsapp import EnviadorWhatsApp
+    from revgas_chatbot.montagem import montar
+
+    parser = argparse.ArgumentParser(description="Webhook do WhatsApp (só nesta máquina; o ngrok expõe)")
+    parser.add_argument("--porta", type=int, default=PORTA, help=f"porta (padrão {PORTA})")
+    argumentos = parser.parse_args(argv)
+
+    ambiente = os.environ if ambiente is None else ambiente
+    try:
+        config = configuracao(ambiente)
+    except ConfiguracaoInvalida as erro:
+        raise SystemExit(f"WhatsApp não iniciou: {erro}") from None
+    if rodar is None:
+        import uvicorn
+
+        rodar = uvicorn.run
+
+    programa = montar(pasta_dados, ambiente=ambiente, ia_permitida=regra_da_ia(config.numeros_equipe))
+    atendimento = AtendimentoWhatsApp(
+        lambda tel: programa(tel, numero_confiavel=True),  # W4: o número vem da Meta
+        EnviadorWhatsApp(config.token, config.phone_number_id),
+    )
+    app = criar_app_whatsapp(
+        receber=atendimento.receber,
+        app_secret=config.app_secret,
+        verify_token=config.verify_token,
+        phone_number_id=config.phone_number_id,
+        dominio=config.dominio,
+        porta=argumentos.porta,
+    )
+    print(
+        f"WhatsApp: webhook em http://{HOST}:{argumentos.porta}/webhook "
+        f"(ligue o ngrok para https://{config.dominio})",
+        flush=True,
+    )
+    print("IA: " + ("ligada só para os números da equipe" if programa.ia_ligada else "desligada"), flush=True)
+    atendimento.ligar()
+    try:
+        # access_log=False: nada de caminhos e endereços no log (W10).
+        rodar(app, host=HOST, port=argumentos.porta, access_log=False)
+    finally:
+        atendimento.desligar()
+
+
+if __name__ == "__main__":
+    main()

@@ -4,6 +4,7 @@ Seam combinado: diálogos Conversa.iniciar()/responder(), agora com um
 InterpretadorFalso nas dependências. Dados fictícios (DDD 00).
 """
 
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ import pytest
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_revgas.api_falsa import ApiRevGasFalsa, RelogioFalso
 from revgas_chatbot.conversa.conversa import Conversa, Dependencias
+from revgas_chatbot.conversa.entrada import numero_ficticio
 from revgas_chatbot.atendimento.fila import FilaDeAtendimento
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.ia.interpretacao import Interpretacao, InterpretadorFalso
@@ -324,7 +326,7 @@ def test_trocar_para_numero_real_desliga_a_ia(dependencias, ia):
     from dataclasses import replace
 
     ia.respostas["quero 2 botijões"] = pedir(produto="botijão de gás", quantidade=2)
-    deps = replace(dependencias, ia_so_com_numero_ficticio=True)
+    deps = replace(dependencias, ia_permitida=numero_ficticio)
     conversa = Conversa(TELEFONE, deps)  # começa com número fictício (DDD 00)
     dialogo(conversa, "não", "(86) 99999-0000", "sim", "Fulano")
 
@@ -338,12 +340,28 @@ def test_numero_ficticio_digitado_mantem_a_ia(dependencias, ia):
     from dataclasses import replace
 
     ia.respostas["quero 2 botijões"] = pedir(produto="botijão de gás", quantidade=2)
-    conversa = Conversa(TELEFONE, replace(dependencias, ia_so_com_numero_ficticio=True))
+    conversa = Conversa(TELEFONE, replace(dependencias, ia_permitida=numero_ficticio))
     dialogo(conversa, "não", "(00) 90000-0005", "sim", "Fulano")
 
     assert "Quantos?" not in texto(conversa.responder("quero 2 botijões"))
     # "Fulano" também foi: no passo do nome a IA é consultada só para vazamento (S1).
     assert [t for t, _ in ia.recebidos] == ["Fulano", "quero 2 botijões"]
+
+
+def test_regra_da_ia_vale_para_o_telefone_atual(dependencias, ia):
+    # WhatsApp (W2): a regra pode liberar números reais da equipe; ela vale para o telefone ATUAL.
+    ia.respostas["quero 2 botijões"] = pedir(produto="botijão de gás", quantidade=2)
+    equipe = lambda t: t == "5586999990000"  # noqa: E731
+    conversa = Conversa("5586999990000", replace(dependencias, ia_permitida=equipe))
+    dialogo(conversa, "sim", "Fulano")
+    conversa.responder("quero 2 botijões")
+    assert [t for t, _ in ia.recebidos] == ["Fulano", "quero 2 botijões"]
+
+    outra = Conversa("5586999990000", replace(dependencias, ia_permitida=equipe))
+    ia.recebidos.clear()
+    dialogo(outra, "não", "(86) 98888-0000", "sim", "Fulano")
+    outra.responder("quero 2 botijões")
+    assert ia.recebidos == []
 
 
 # --- Ajuste do endereço (A1) com a IA ---------------------------------------------------
