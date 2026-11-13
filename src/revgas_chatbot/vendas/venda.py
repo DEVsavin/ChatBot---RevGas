@@ -4,10 +4,14 @@ Função pura: recebe um Pedido já validado e devolve o dicionário que vai
 para a API. Não faz nenhuma chamada de rede.
 
 Decisões (ver `docs/revgas-api-vendas.md`):
-- Uma linha por unidade, sempre com `quantity: 1`. Assim `value` é o preço
-  de uma unidade, seja ele lido pela API como unitário ou como total da linha.
-- Não enviamos `origin`, `option`, `broadcast`, `lat`, `lon` nem
-  `deliverer_id`: os valores corretos ainda não foram confirmados.
+- Uma linha por produto, com `quantity` N e `value` = preço UNITÁRIO. A API
+  não soma linhas repetidas do mesmo produto, e `value` é unitário
+  (confirmado na venda de teste 30811219: quantity 2 x 110,00 = 220,00).
+- `origin: INTEGRATION` e `option: NORMAL`: sem `option` a API recusa com
+  "Dados da Entrega da Venda estão incompletos!". NORMAL não confirma a
+  venda sozinha (INDOOR/OUTDOOR confirmam).
+- Não enviamos `broadcast`, `lat`, `lon` nem `deliverer_id`: os valores
+  corretos ainda não foram confirmados (a central atribui o entregador).
 - Cartão: só a forma de pagamento; nada de bandeira ou dado do cartão.
 - `observation` termina com a marca `[chatbot:<pedido_id>]`, usada para
   achar a venda se o envio der timeout.
@@ -23,6 +27,8 @@ from revgas_chatbot.conversa.estados import nome_do_estado
 from revgas_chatbot.vendas.pedido import DINHEIRO, Pedido, ProdutoCatalogo
 
 CANAL = "WHATSAPP"
+ORIGEM = "INTEGRATION"  # venda criada por integração (central de pedidos)
+OPCAO = "NORMAL"  # não confirma a venda sozinha
 CENTAVOS = Decimal("0.01")
 
 
@@ -56,16 +62,15 @@ def montar_corpo_venda(
     establishment_id: int,
 ) -> dict[str, Any]:
     """Monta o corpo do POST /sales. O pedido deve ter passado por `validar`."""
-    linhas = []
+    quantidades: dict[int, int] = {}  # ordem do pedido; o mesmo produto vira UMA linha
     for item in pedido.itens:
         if item.product_id not in catalogo:
             raise ValueError(f"produto fora do catálogo: {item.product_id}")
-        preco = catalogo[item.product_id].preco.quantize(CENTAVOS)
-        # Um dicionário novo por unidade (`[d] * n` repetiria o mesmo objeto).
-        linhas += [
-            {"product_id": item.product_id, "quantity": 1, "value": preco}
-            for _ in range(item.quantidade)
-        ]
+        quantidades[item.product_id] = quantidades.get(item.product_id, 0) + item.quantidade
+    linhas = [
+        {"product_id": produto, "quantity": quantidade, "value": catalogo[produto].preco.quantize(CENTAVOS)}
+        for produto, quantidade in quantidades.items()
+    ]
 
     endereco = pedido.endereco
     if endereco is None:
@@ -75,6 +80,8 @@ def montar_corpo_venda(
         "establishment_id": establishment_id,
         "customer_id": customer_id,
         "channel": CANAL,
+        "origin": ORIGEM,
+        "option": OPCAO,
         "products": linhas,
         "payments": [
             {"payment_type": p.tipo, "value": p.valor.quantize(CENTAVOS)} for p in pedido.pagamentos

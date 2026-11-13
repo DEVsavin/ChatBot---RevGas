@@ -102,7 +102,7 @@ def test_cliente_cadastrado_faz_pedido_completo(conversa, api):
 
     [venda] = api.vendas_criadas()
     assert venda["customer_id"] == 77
-    assert [p["quantity"] for p in venda["products"]] == [1, 1]
+    assert [p["quantity"] for p in venda["products"]] == [2]  # 1 linha, quantity 2 (M4)
     assert venda["payments"] == [{"payment_type": "PIX", "value": Decimal("220.00")}]
     assert texto(confirmacao) == f"Pedido registrado! Número {venda['id']}, total R$ 220,00."
 
@@ -331,7 +331,7 @@ def test_corrigir_produto_volta_ao_resumo_sem_refazer_o_resto(conversa, api):
     assert "Pagamento: PIX" in texto(resumo)  # pagamento mantido
     conversa.responder("1")
     [venda] = api.vendas_criadas()
-    assert len(venda["products"]) == 3
+    assert [p["quantity"] for p in venda["products"]] == [3]  # 1 linha, quantity 3 (M4)
 
 
 def test_corrigir_endereco_pede_campo_a_campo_e_volta_ao_resumo(conversa, api):

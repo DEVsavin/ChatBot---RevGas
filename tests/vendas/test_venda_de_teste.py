@@ -66,7 +66,7 @@ def test_aceitando_cria_uma_venda_no_formato_do_mvp():
     api, saida, perguntas = executar(["--broadcast", "NONE"], ["sim", "sim", "não"])
 
     [venda] = api.vendas_criadas()
-    assert [(p["product_id"], p["quantity"]) for p in venda["products"]] == [(26717, 1), (26717, 1)]
+    assert [(p["product_id"], p["quantity"]) for p in venda["products"]] == [(26717, 2)]  # 1 linha (M4)
     assert venda["payments"] == [{"payment_type": "CARTAO_DE_CREDITO", "value": 220.0}]
     assert "TESTE" in venda["observation"] and "[chatbot:" in venda["observation"]
     assert f"Venda criada: id {venda['id']}" in saida
@@ -278,3 +278,206 @@ def test_sem_cliente_erro_4xx_mostra_a_mensagem_sem_numeros_longos():
 def test_sem_cliente_e_um_modo_proprio():
     with pytest.raises(SystemExit):
         executar(["--sem-cliente", "--broadcast", "NONE"], [])
+
+
+# --- D13: 5º envio, com o customer_id de um cliente do próprio usuário --------------------
+
+
+def com_cliente(respostas, *, api=None, customer_id="5700355"):
+    def nao_pede_telefone(texto):
+        raise AssertionError("o modo --customer-id não pede telefone")
+
+    api = api or ApiDeTeste()
+    fila, perguntas, saida = list(respostas), [], []
+
+    def perguntar(texto):
+        perguntas.append(texto)
+        return fila.pop(0)
+
+    rodar(["--customer-id", customer_id], api=api, relogio=api.relogio, perguntar=perguntar,
+          ler_segredo=nao_pede_telefone, escrever=saida.append)
+    return api, "\n".join(saida), perguntas
+
+
+def test_customer_id_manda_o_corpo_do_4o_envio_mais_o_cliente():
+    api, saida, perguntas = com_cliente(["sim", "não"])
+
+    assert api.operacoes == ["criar_venda"]  # nada de /customers
+    [venda] = api.vendas_criadas()
+    assert venda["customer_id"] == 5700355
+    assert venda["products"] == [{"product_id": 26717, "quantity": 2, "value": 110.0}]
+    assert venda["payments"] == [{"payment_type": "CARTAO_DE_CREDITO", "value": 220.0}]
+    assert (venda["lat"], venda["lon"]) == (-5.0892, -42.8016)
+    assert venda["broadcast"] == "NONE"
+    assert venda["state_federation"] == "Piauí"
+    assert venda["landmark"] == "VENDA DE TESTE - NAO ENTREGAR"
+    assert "TESTE" in venda["observation"] and "[chatbot:" in venda["observation"]
+    assert "POST /sales, cliente 5700355" in perguntas[0]
+    assert f"Venda criada: id {venda['id']}, status ACTIVE" in saida
+    assert "PUT /sales/" in perguntas[1]
+
+
+def test_customer_id_recusado_nao_envia_nada():
+    api, saida, _ = com_cliente(["não"])
+
+    assert api.operacoes == []
+    assert "Nada foi enviado" in saida
+
+
+def test_customer_id_cancelamento_aceito():
+    api, saida, _ = com_cliente(["sim", "sim"])
+
+    assert api.cancelamentos == [api.vendas_criadas()[0]["id"]]
+    assert "Cancelamento: HTTP 200" in saida
+
+
+@pytest.mark.parametrize("falha", [TIMEOUT_DEPOIS_DE_CRIAR, DepoisDeCriar(Resposta(504, None)), Resposta(503, None)])
+def test_customer_id_resultado_incerto_nao_reenvia(falha):
+    api = ApiDeTeste()
+    api.roteirizar("criar_venda", falha)
+    api, saida, perguntas = com_cliente(["sim"], api=api)
+
+    assert api.operacoes == ["criar_venda"]
+    assert "Não reenvie" in saida and "[chatbot:" in saida
+    assert len(perguntas) == 1
+
+
+def test_customer_id_erro_4xx_mostra_a_mensagem():
+    api = ApiDeTeste()
+    api.roteirizar("criar_venda", Resposta(400, {"message": "Dados da Entrega da Venda estão incompletos!"}))
+    api, saida, perguntas = com_cliente(["sim"], api=api)
+
+    assert "POST /sales: HTTP 400" in saida and "Dados da Entrega" in saida
+    assert len(perguntas) == 1
+
+
+@pytest.mark.parametrize("valor", ["0", "-1", "abc"])
+def test_customer_id_invalido_e_recusado(valor):
+    with pytest.raises(SystemExit):
+        com_cliente([], customer_id=valor)
+
+
+def test_customer_id_e_um_modo_proprio():
+    with pytest.raises(SystemExit):
+        executar(["--customer-id", "5700355", "--sem-cliente"], [])
+
+
+# --- D14: 6º envio, avisando os entregadores (só com --customer-id) ------------------------
+
+
+def test_avisar_entregadores_manda_new_sale_e_avisa_na_pergunta():
+    api = ApiDeTeste()
+    fila, perguntas, saida = ["sim", "sim"], [], []
+    rodar(["--customer-id", "5700355", "--avisar-entregadores"], api=api, relogio=api.relogio,
+          perguntar=lambda t: (perguntas.append(t), fila.pop(0))[1],
+          ler_segredo=lambda t: pytest.fail("não pede telefone"), escrever=saida.append)
+
+    [venda] = api.vendas_criadas()
+    assert venda["broadcast"] == "NEW_SALE"
+    assert venda["customer_id"] == 5700355
+    assert "deliverer_id" not in venda
+    assert "broadcast NEW_SALE" in perguntas[0]
+    assert "os entregadores do estabelecimento 2580 serão avisados" in perguntas[0]
+    assert "PUT /sales/" in perguntas[1]  # cancelamento oferecido logo depois do 201
+    assert api.cancelamentos == [venda["id"]]
+
+
+def test_sem_a_flag_continua_none_e_sem_aviso():
+    api, _, perguntas = com_cliente(["sim", "não"])
+
+    assert api.vendas_criadas()[0]["broadcast"] == "NONE"
+    assert "serão avisados" not in perguntas[0]
+    assert "deliverer_id" not in api.vendas_criadas()[0]
+
+
+@pytest.mark.parametrize("argv", [
+    ["--avisar-entregadores"],
+    ["--sem-cliente", "--avisar-entregadores"],
+    ["--broadcast", "NONE", "--avisar-entregadores"],
+    ["--cancelar", "30", "--avisar-entregadores"],
+])
+def test_avisar_entregadores_so_vale_junto_de_customer_id(argv):
+    with pytest.raises(SystemExit):
+        executar(argv, [])
+
+
+# --- D15: 7º envio, com o endereço digitado na hora (nos testes, inventado) ---------------
+
+RUA, NUMERO, COMPLEMENTO, BAIRRO = "Rua Inventada do Teste", "123", "Bloco Z", "Bairro Inventado"
+
+
+def endereco_real(respostas, *, argv=("--customer-id", "5700355", "--endereco-real"), api=None):
+    api = api or ApiDeTeste()
+    fila, perguntas, saida = list(respostas), [], []
+
+    def perguntar(texto):
+        perguntas.append(texto)
+        return fila.pop(0)
+
+    rodar(list(argv), api=api, relogio=api.relogio, perguntar=perguntar,
+          ler_segredo=lambda t: pytest.fail("não pede telefone"), escrever=saida.append)
+    return api, "\n".join(saida), perguntas
+
+
+def test_endereco_real_vai_no_corpo_e_o_resto_e_igual_ao_5o():
+    api, saida, perguntas = endereco_real([RUA, NUMERO, COMPLEMENTO, BAIRRO, "sim", "sim"])
+
+    [venda] = api.vendas_criadas()
+    assert (venda["location"], venda["number"], venda["complement"], venda["neighborhood"]) == (
+        RUA, NUMERO, COMPLEMENTO, BAIRRO)
+    assert (venda["city"], venda["state_federation"]) == ("Teresina", "Piauí")
+    assert venda["customer_id"] == 5700355
+    assert venda["broadcast"] == "NONE"
+    assert venda["products"] == [{"product_id": 26717, "quantity": 2, "value": 110.0}]
+    assert "TESTE" in venda["observation"] and "[chatbot:" in venda["observation"]
+    assert "deliverer_id" not in venda
+    assert "endereço que você digitou" in perguntas[4]
+    assert api.cancelamentos == [venda["id"]]  # cancelamento logo após o 201
+
+
+def test_o_endereco_nunca_aparece_na_saida_nem_nas_perguntas():
+    _, saida, perguntas = endereco_real([RUA, NUMERO, COMPLEMENTO, BAIRRO, "sim", "não"])
+
+    tudo = saida + "\n".join(perguntas)
+    for parte in (RUA, COMPLEMENTO, BAIRRO):
+        assert parte not in tudo
+
+
+def test_endereco_real_sem_complemento():
+    api, _, _ = endereco_real([RUA, NUMERO, "", BAIRRO, "sim", "não"])
+
+    assert "complement" not in api.vendas_criadas()[0]
+
+
+@pytest.mark.parametrize("respostas", [["", NUMERO, "", BAIRRO], [RUA, " ", "", BAIRRO], [RUA, NUMERO, "", ""]])
+def test_endereco_incompleto_nao_envia(respostas):
+    api, saida, _ = endereco_real(respostas)
+
+    assert api.operacoes == []
+    assert "Endereço incompleto. Nada foi enviado." in saida
+
+
+def test_endereco_real_recusado_nao_envia():
+    api, saida, _ = endereco_real([RUA, NUMERO, "", BAIRRO, "não"])
+
+    assert api.operacoes == []
+    assert "Nada foi enviado" in saida
+
+
+def test_erro_da_api_nao_mostra_o_endereco():
+    api = ApiDeTeste()
+    api.roteirizar("criar_venda", Resposta(400, {"message": f"Dados da Entrega incompletos: {RUA}, {BAIRRO}"}))
+    _, saida, _ = endereco_real([RUA, NUMERO, "", BAIRRO, "sim"], api=api)
+
+    assert "HTTP 400" in saida
+    assert RUA not in saida and BAIRRO not in saida
+
+
+@pytest.mark.parametrize("argv", [
+    ["--endereco-real"],
+    ["--sem-cliente", "--endereco-real"],
+    ["--customer-id", "5700355", "--endereco-real", "--avisar-entregadores"],
+])
+def test_endereco_real_so_junto_de_customer_id_e_sem_avisar(argv):
+    with pytest.raises(SystemExit):
+        executar(argv, [])

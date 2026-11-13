@@ -2,12 +2,24 @@
 
     uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --broadcast NONE
     uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --sem-cliente
+    uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --customer-id <N>
+    uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --customer-id <N> --avisar-entregadores
+    uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --customer-id <N> --endereco-real
     uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --cancelar <id>
 
 `--sem-cliente` (D12): a nossa chave recebe 403 em `/customers`. Este modo
 não pede telefone nem toca em clientes: manda só o POST /sales do mesmo
 formato, sem `customer_id`, para ver se a API aceita. Em timeout ou 5xx,
 nunca reenvia: mostra a marca para conferir.
+
+`--customer-id N` (D13, 5º envio): o mesmo POST /sales, com o cliente N (um
+cliente do próprio usuário, cujo id aparece nas vendas dele em GET /sales).
+`--avisar-entregadores` (D14, 6º envio, só junto de `--customer-id`): troca o
+broadcast NONE por NEW_SALE, que AVISA os entregadores do 2580. A pergunta
+diz isso; o cancelamento é oferecido logo após o 201. Nunca `deliverer_id`.
+`--endereco-real` (D15, 7º envio, só junto de `--customer-id`, sem avisar
+entregadores): pergunta rua, número, complemento e bairro na hora (Teresina,
+PI). O endereço fica só na memória: nunca é mostrado, salvo nem registrado.
 
 O que faz, nesta ordem:
 1. pede o telefone sem mostrar na tela (o cliente da venda de teste é o
@@ -48,7 +60,8 @@ from revgas_chatbot.vendas.venda import marca, montar_corpo_venda, reais
 PRODUTO = 26717
 QUANTIDADE = 2
 PAGAMENTO = "CARTAO_DE_CREDITO"
-BROADCAST = "NONE"  # D11: única opção autorizada; omitir pode avisar entregador real (D5)
+BROADCAST = "NONE"  # D11: padrão; omitir pode avisar entregador real (D5)
+AVISAR_ENTREGADORES = "NEW_SALE"  # D14: só no 6º envio, com --customer-id e a flag explícita
 NOME = "Teste Chatbot Extensao"
 ENDERECO = Endereco(
     logradouro="Rua de Teste do Chatbot",
@@ -74,17 +87,28 @@ def _sem_numeros(texto: str) -> str:
     return re.sub(r"\d{8,}", "[número]", texto)
 
 
-def _mostrar_erro(rotulo: str, resposta: Resposta, escrever: Escrever) -> None:
+def _mostrar_erro(rotulo: str, resposta: Resposta, escrever: Escrever, ocultar: tuple[str, ...] = ()) -> None:
     if resposta.status >= 300:
         detalhe = json.dumps(resposta.dados, ensure_ascii=False, default=str) if resposta.dados is not None else ""
+        for parte in ocultar:  # D15: o endereço digitado nunca aparece, nem ecoado pela API
+            detalhe = detalhe.replace(parte, "[endereço]")
         escrever(f"{rotulo}: HTTP {resposta.status} {_sem_numeros(detalhe)[:500]}")
 
 
 class _ApiComConfirmacao:
     """Embrulha a API: GET passa direto; cada POST pede "sim" antes de sair."""
 
-    def __init__(self, api: Any, perguntar: Perguntar, escrever: Escrever) -> None:
+    def __init__(
+        self,
+        api: Any,
+        perguntar: Perguntar,
+        escrever: Escrever,
+        broadcast: str = BROADCAST,
+        ocultar: tuple[str, ...] = (),
+    ) -> None:
         self._api = api
+        self._broadcast = broadcast
+        self._ocultar = ocultar
         self._perguntar = perguntar
         self._escrever = escrever
         self.recusou_a_venda = False
@@ -105,23 +129,34 @@ class _ApiComConfirmacao:
         return resposta
 
     def criar_venda(self, corpo: dict[str, Any]) -> Resposta:
-        corpo = {**corpo, "broadcast": BROADCAST}
+        corpo = {**corpo, "broadcast": self._broadcast}
         linhas = "; ".join(f"{p['product_id']} x {p['quantity']} a {reais(Decimal(str(p['value'])))}" for p in corpo["products"])
         pago = sum((Decimal(str(p["value"])) for p in corpo["payments"]), Decimal(0))
         cliente = f"cliente {corpo['customer_id']}" if "customer_id" in corpo else "sem cliente (sem customer_id)"
         try:
             self._autorizar(
                 f"POST /sales, {cliente}: {len(corpo['products'])} linha(s) [{linhas}], "
-                f"{PAGAMENTO} pagamento {reais(pago)}, broadcast {BROADCAST}, "
+                f"{PAGAMENTO} pagamento {reais(pago)}, broadcast {self._broadcast}, "
                 + (f"lat/lon {corpo['lat']}, {corpo['lon']}, " if "lat" in corpo else "")
-                + "endereço e observação de TESTE. Enviar? (sim/não) "
+                + (
+                    "endereço que você digitou (não fica salvo) e observação de TESTE. "
+                    if self._ocultar
+                    else "endereço e observação de TESTE. "
+                )
+                + (
+                    "ATENÇÃO: os entregadores do estabelecimento 2580 serão avisados desta venda "
+                    "de teste; o cancelamento é oferecido logo depois. "
+                    if self._broadcast == AVISAR_ENTREGADORES
+                    else ""
+                )
+                + "Enviar? (sim/não) "
             )
         except Recusado:
             self.recusou_a_venda = True
             raise
         resposta = self._api.criar_venda(corpo)
-        _mostrar_erro("POST /sales", resposta, self._escrever)
-        if resposta.status in (400, 422):
+        _mostrar_erro("POST /sales", resposta, self._escrever, self._ocultar)
+        if resposta.status in (400, 422) and self._broadcast == BROADCAST:
             self._escrever(
                 "A API recusou a venda. Se o motivo for o broadcast, não rode de novo sem o "
                 "broadcast NONE: essa decisão volta para o usuário (D5)."
@@ -164,24 +199,40 @@ def _cancelar(api: Any, venda_id: int, perguntar: Perguntar, escrever: Escrever)
     _mostrar_erro("PUT /cancel", resposta, escrever)
 
 
-def _pedido_de_teste(telefone: str, total: Decimal) -> Pedido:
+def _pedido_de_teste(telefone: str, total: Decimal, endereco: Endereco = ENDERECO) -> Pedido:
     return Pedido(
         pedido_id=str(uuid.uuid4()),
         telefone=telefone,
         nome=NOME,
         itens=(Item(PRODUTO, QUANTIDADE),),
-        endereco=ENDERECO,
+        endereco=endereco,
         pagamentos=(Pagamento(PAGAMENTO, total),),
         observacao=OBSERVACAO,
     )
 
 
-def _venda_sem_cliente(api: Any, relogio: Relogio, perguntar: Perguntar, escrever: Escrever) -> None:
-    """D12: 1 POST /sales sem customer_id. Nunca reenvia."""
+def _venda_direta(
+    api: Any,
+    relogio: Relogio,
+    perguntar: Perguntar,
+    escrever: Escrever,
+    *,
+    customer_id: int | None,
+    broadcast: str = BROADCAST,
+    endereco: Endereco | None = None,  # D15: digitado na hora; nunca salvo nem mostrado
+) -> None:
+    """1 POST /sales sem passar por /customers. Nunca reenvia.
+
+    D12 (`customer_id=None`): sem cliente. D13 (5º envio): com o `customer_id` de um
+    cliente do próprio usuário, lido de uma venda dele (GET /sales), porque /customers dá 403.
+    """
     catalogo = carregar_catalogo(PASTA_CONFIG / "catalogo.json")
-    pedido = _pedido_de_teste("", catalogo[PRODUTO].preco * QUANTIDADE)
+    pedido = _pedido_de_teste("", catalogo[PRODUTO].preco * QUANTIDADE, endereco or ENDERECO)
     corpo = montar_corpo_venda(pedido, customer_id=0, catalogo=catalogo, establishment_id=ESTABELECIMENTO)
-    del corpo["customer_id"]
+    if customer_id is None:
+        del corpo["customer_id"]
+    else:
+        corpo["customer_id"] = customer_id
     # A API não soma linhas repetidas do mesmo produto (1º envio: 400, total 110).
     # 2º envio: 1 linha com quantity 2 a 110 e pagamento 220 (Dv5: 201 = value unitário;
     # 400 com total 110 = value é o total da linha). O M2 só muda depois do resultado.
@@ -190,7 +241,12 @@ def _venda_sem_cliente(api: Any, relogio: Relogio, perguntar: Perguntar, escreve
     # lat/lon de um ponto genérico do centro de Teresina (não é o endereço de ninguém).
     # 3º envio como texto: mesmo 400. 4º envio: como número, como nas vendas reais.
     corpo["lat"], corpo["lon"] = PONTO_GENERICO
-    confirmando = _ApiComConfirmacao(api, perguntar, escrever)
+    ocultar = (
+        tuple(p for p in (endereco.logradouro, endereco.complemento, endereco.bairro) if p)
+        if endereco is not None
+        else ()
+    )
+    confirmando = _ApiComConfirmacao(api, perguntar, escrever, broadcast, ocultar)
     incerto = (
         f"Resultado incerto. Não reenvie: confira no painel da RevGás se existe venda com a marca "
         f"{marca(pedido.pedido_id)}."
@@ -219,6 +275,31 @@ def _venda_sem_cliente(api: Any, relogio: Relogio, perguntar: Perguntar, escreve
     _cancelar(api, venda["id"], perguntar, escrever)
 
 
+def _ler_endereco(perguntar: Perguntar) -> Endereco | None:
+    """D15: o endereço do próprio usuário, digitado na hora. Fica só na memória."""
+    rua = perguntar("Rua do seu endereço (não fica salva): ").strip()
+    numero = perguntar("Número (ou S/N): ").strip()
+    complemento = perguntar("Complemento (Enter para pular): ").strip()
+    bairro = perguntar("Bairro: ").strip()
+    if not (rua and numero and bairro):
+        return None
+    return Endereco(
+        logradouro=rua,
+        numero=numero,
+        bairro=bairro,
+        cidade="Teresina",
+        estado="PI",
+        complemento=complemento or None,
+        referencia=ENDERECO.referencia,  # continua marcada como venda de teste
+    )
+
+
+def _id_positivo(texto: str) -> int:
+    if not texto.isdigit() or int(texto) <= 0:
+        raise argparse.ArgumentTypeError("use o número do cliente, ex.: 5700355")
+    return int(texto)
+
+
 def rodar(
     argv: list[str] | None,
     *,
@@ -232,14 +313,39 @@ def rodar(
     modo = parser.add_mutually_exclusive_group(required=True)
     modo.add_argument("--broadcast", choices=[BROADCAST], help="sempre NONE: não notificar entregadores (D11)")
     modo.add_argument("--sem-cliente", action="store_true", help="venda sem customer_id, sem telefone (D12)")
+    modo.add_argument("--customer-id", type=_id_positivo, metavar="N", help="venda com o cliente N (D13)")
     modo.add_argument("--cancelar", type=int, metavar="ID", help="só tentar cancelar a venda ID")
+    parser.add_argument(
+        "--avisar-entregadores",
+        action="store_true",
+        help="só com --customer-id: broadcast NEW_SALE, AVISA os entregadores do 2580 (D14)",
+    )
+    parser.add_argument(
+        "--endereco-real",
+        action="store_true",
+        help="só com --customer-id: pergunta o seu endereço na hora; nunca é salvo (D15)",
+    )
     argumentos = parser.parse_args(argv)
+    if argumentos.avisar_entregadores and argumentos.customer_id is None:
+        parser.error("--avisar-entregadores só vale junto de --customer-id")
+    if argumentos.endereco_real and (argumentos.customer_id is None or argumentos.avisar_entregadores):
+        parser.error("--endereco-real só vale junto de --customer-id e sem --avisar-entregadores (D15)")
 
     if argumentos.cancelar is not None:
         _cancelar(api, argumentos.cancelar, perguntar, escrever)
         return
-    if argumentos.sem_cliente:
-        _venda_sem_cliente(api, relogio, perguntar, escrever)
+    if argumentos.sem_cliente or argumentos.customer_id is not None:
+        broadcast = AVISAR_ENTREGADORES if argumentos.avisar_entregadores else BROADCAST
+        endereco = None
+        if argumentos.endereco_real:
+            endereco = _ler_endereco(perguntar)
+            if endereco is None:
+                escrever("Endereço incompleto. Nada foi enviado.")
+                return
+        _venda_direta(
+            api, relogio, perguntar, escrever,
+            customer_id=argumentos.customer_id, broadcast=broadcast, endereco=endereco,
+        )
         return
 
     numero = ler_telefone(ler_segredo("Seu telefone com DDD (não aparece na tela): "))

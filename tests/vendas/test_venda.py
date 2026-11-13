@@ -73,24 +73,32 @@ def test_complemento_e_referencia_vazios_nao_vao(vazio):
     assert "landmark" not in corpo
 
 
-def test_campos_pendentes_nao_sao_enviados():
-    # origin/option/broadcast: valores desconhecidos (D4/D5).
-    # lat/lon: D6. deliverer_id: a central atribui.
+def test_origem_integracao_e_opcao_normal():
+    # M4, 8º envio (venda 30811219, 201): sem `option` a API responde 400
+    # "Dados da Entrega da Venda estão incompletos!". NORMAL não confirma a venda sozinha.
     corpo = montar(pedido())
-    for campo in ("origin", "option", "broadcast", "lat", "lon", "deliverer_id"):
+    assert corpo["origin"] == "INTEGRATION"
+    assert corpo["option"] == "NORMAL"
+
+
+def test_campos_pendentes_nao_sao_enviados():
+    # broadcast: D5. lat/lon: D6. deliverer_id: a central atribui.
+    corpo = montar(pedido())
+    for campo in ("broadcast", "lat", "lon", "deliverer_id"):
         assert campo not in corpo
 
 
-# --- itens: uma linha por unidade ---------------------------------------------
+# --- itens: uma linha por produto, com a quantidade e o preço unitário --------
 
 
-def test_n_unidades_viram_n_linhas_com_quantity_1():
+def test_n_unidades_viram_uma_linha_com_quantity_n_e_preco_unitario():
+    # M4: a API não soma linhas repetidas do mesmo produto (1º envio: total 110 em vez de 220)
+    # e `value` é o preço unitário (8º envio: quantity 2 x 110,00 = total 220,00).
     p = pedido(
         itens=(Item(product_id=1, quantidade=3),),
         pagamentos=(Pagamento(tipo="PIX", valor=Decimal("330.00")),),
     )
-    linhas = montar(p)["products"]
-    assert linhas == [{"product_id": 1, "quantity": 1, "value": Decimal("110.00")}] * 3
+    assert montar(p)["products"] == [{"product_id": 1, "quantity": 3, "value": Decimal("110.00")}]
 
 
 def test_preco_vem_do_catalogo():
@@ -217,11 +225,22 @@ def test_troco_igual_ao_valor_em_dinheiro_vira_sem_troco():
     assert montar(p)["observation"] == "[chatbot:abc-123]"
 
 
-def test_cada_linha_e_um_objeto_independente():
+def test_o_mesmo_produto_em_dois_itens_vira_uma_linha_so():
     p = pedido(
-        itens=(Item(product_id=1, quantidade=2),),
-        pagamentos=(Pagamento(tipo="PIX", valor=Decimal("220.00")),),
+        itens=(Item(product_id=1, quantidade=2), Item(product_id=1, quantidade=1)),
+        pagamentos=(Pagamento(tipo="PIX", valor=Decimal("330.00")),),
     )
-    linhas = montar(p)["products"]
-    linhas[0]["quantity"] = 99
-    assert linhas[1]["quantity"] == 1
+    assert montar(p)["products"] == [{"product_id": 1, "quantity": 3, "value": Decimal("110.00")}]
+
+
+def test_produtos_diferentes_viram_linhas_diferentes_na_ordem():
+    catalogo = {**CATALOGO, 2: ProdutoCatalogo(nome="água 20 L", preco=Decimal("15.00"))}
+    p = pedido(
+        itens=(Item(product_id=2, quantidade=1), Item(product_id=1, quantidade=2)),
+        pagamentos=(Pagamento(tipo="PIX", valor=Decimal("235.00")),),
+    )
+    corpo = montar_corpo_venda(p, customer_id=CLIENTE, catalogo=catalogo, establishment_id=ESTABELECIMENTO)
+    assert corpo["products"] == [
+        {"product_id": 2, "quantity": 1, "value": Decimal("15.00")},
+        {"product_id": 1, "quantity": 2, "value": Decimal("110.00")},
+    ]
