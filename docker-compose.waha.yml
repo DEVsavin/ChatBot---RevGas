@@ -1,0 +1,29 @@
+# WAHA (WhatsApp HTTP API) para o canal WhatsApp pelo chip.
+# Spec: .scratch/whatsapp/spec-waha.md. Suba com ./scripts/whatsapp-waha.sh
+# (ou: docker compose -f docker-compose.waha.yml --env-file .env up -d).
+#
+# - Só nesta máquina: a porta 3000 fica presa em 127.0.0.1.
+# - A sessão do WhatsApp fica em dados/waha-sessoes (fora do git: dá acesso ao chip).
+# - Cada mensagem nova vai, assinada (HMAC sha512), para o chatbot em 127.0.0.1:8002.
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: revgas-waha
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./dados/waha-sessoes:/app/.sessions
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?falta WAHA_API_KEY no .env}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:?falta WAHA_DASHBOARD_USERNAME no .env}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?falta WAHA_DASHBOARD_PASSWORD no .env}
+      WHATSAPP_SWAGGER_USERNAME: ${WAHA_DASHBOARD_USERNAME}
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      WHATSAPP_START_SESSION: ${WAHA_SESSAO:-default}
+      WHATSAPP_RESTART_ALL_SESSIONS: "True"
+      WHATSAPP_HOOK_URL: http://host.docker.internal:8002/webhook
+      WHATSAPP_HOOK_EVENTS: message
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_HMAC_KEY:?falta WAHA_HMAC_KEY no .env}

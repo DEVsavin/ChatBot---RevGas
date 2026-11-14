@@ -66,6 +66,7 @@ cp .env.example .env
 | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_DOMINIO` | Canal WhatsApp |
 | `WHATSAPP_BUSINESS_ACCOUNT_ID` | Só referência da conta na Meta; o programa não usa |
 | `WHATSAPP_NUMEROS_EQUIPE` | Até 5 celulares da equipe, separados por vírgula: só eles (e os números fictícios) usam a IA |
+| `WAHA_URL`, `WAHA_SESSAO`, `WAHA_API_KEY`, `WAHA_HMAC_KEY`, `WAHA_DASHBOARD_USERNAME`, `WAHA_DASHBOARD_PASSWORD`, `WAHA_ATENDER` | WhatsApp pelo chip (WAHA); veja a seção abaixo |
 
 O `.env` está no `.gitignore` e **nunca** deve ser enviado ao repositório.
 
@@ -116,9 +117,45 @@ Abra **http://127.0.0.1:8000**, digite um telefone de demonstração e converse.
 
 > As orientações de segurança para vazamento (`config/seguranca.txt`) são provisórias e ainda serão validadas com a revenda.
 
-## 📱 WhatsApp
+## 📲 WhatsApp pelo chip (WAHA)
 
-O chatbot atende pelo WhatsApp usando a Cloud API da Meta, com o número de teste dela. O programa roda nesta máquina (`127.0.0.1:8001`) e o [ngrok](https://ngrok.com/) leva até ele as mensagens que a Meta envia. Só a rota `/webhook` passa pelo túnel: a página do chat e a fila da equipe continuam acessíveis apenas localmente.
+O chatbot atende pelo WhatsApp de um **chip comum**, usando o [WAHA](https://waha.devlike.pro/) (WhatsApp HTTP API) num contêiner Docker. O WAHA e o chatbot rodam só nesta máquina (`127.0.0.1:3000` e `127.0.0.1:8002`); não precisa de ngrok.
+
+> O WAHA não é a API oficial do WhatsApp: use um **chip separado**, que possa ser bloqueado sem prejuízo.
+
+### Passo a passo
+
+1. **Abra o Docker Desktop** e espere aparecer "Docker is running" (ou o ícone ficar verde).
+2. **Rode um comando**, na pasta do projeto:
+   ```bash
+   ./scripts/whatsapp-waha.sh
+   ```
+   Na primeira vez ele baixa a imagem do WAHA (alguns minutos). Ele mostra três etapas e, no fim, **"OK: o WAHA alcança o chatbot."** Se aparecer "ATENÇÃO: o WAHA NÃO alcança o chatbot", veja o plano B abaixo.
+3. **Leia o QR code:** abra **http://127.0.0.1:3000/dashboard** no navegador. O usuário e a senha estão no `.env` (`WAHA_DASHBOARD_USERNAME` e `WAHA_DASHBOARD_PASSWORD`). Na sessão `default`, quando o status for `SCAN_QR_CODE`, clique no ícone da câmera e leia o código com o celular do chip (WhatsApp → **Aparelhos conectados** → **Conectar um aparelho**). O status muda para `WORKING`.
+4. **Teste:** de um celular da equipe (listado em `WHATSAPP_NUMEROS_EQUIPE`), mande "oi" para o número do chip. Chegam a saudação e "Este número é seu?". Faça um pedido completo até "Pedido registrado!".
+5. **Para desligar:** `Ctrl+C` no terminal desliga o chatbot. O WAHA continua no Docker (e o QR não é pedido de novo); para desligá-lo também:
+   ```bash
+   docker compose -f docker-compose.waha.yml down
+   ```
+
+### Como ele se comporta
+
+- **Quem é atendido:** com `WAHA_ATENDER=equipe` (padrão), só os números de `WHATSAPP_NUMEROS_EQUIPE`; mensagens de outros contatos do chip são ignoradas, sem resposta. `WAHA_ATENDER=todos` atende qualquer número (por exemplo, para o professor testar), mas a IA continua só para a equipe e o `--venda-real` não funciona nesse modo.
+- **Nunca responde:** grupos, status, canais, mensagens do próprio chip e mensagens com mais de 10 minutos (ao reconectar, o WhatsApp pode entregar mensagens antigas).
+- **Segurança:** cada mensagem que o WAHA envia ao chatbot é assinada (`WAHA_HMAC_KEY`); sem assinatura válida, é recusada. O painel do WAHA pede usuário e senha, e a API dele pede `WAHA_API_KEY`.
+- **A sessão do WhatsApp** fica em `dados/waha-sessoes` (fora do git). Essa pasta dá acesso ao WhatsApp do chip: não compartilhe. Para desconectar o chip de vez, desligue o WAHA e apague a pasta.
+- **Venda real:** `./scripts/whatsapp-waha.sh --venda-real` (veja a seção **Venda real no ERP**).
+
+### Se o WAHA não alcançar o chatbot (plano B)
+
+O WAHA, dentro do Docker, chama o chatbot pelo endereço `host.docker.internal:8002`. Isso funciona no Docker Desktop; se a checagem do passo 2 falhar, as mensagens não chegam. Nesse caso:
+
+1. Confira se é o **Docker Desktop** que está rodando (não o Docker "puro" do Linux) e rode o comando de novo.
+2. Se continuar falhando, o plano B é rodar o chatbot também dentro do Docker, no mesmo compose do WAHA. Peça à equipe do projeto; enquanto isso, a demonstração pode ser feita pelo **chat no navegador**.
+
+## 📱 WhatsApp (Cloud API da Meta)
+
+O chatbot também atende pelo WhatsApp usando a Cloud API da Meta, com o número de teste dela. O programa roda nesta máquina (`127.0.0.1:8001`) e o [ngrok](https://ngrok.com/) leva até ele as mensagens que a Meta envia. Só a rota `/webhook` passa pelo túnel: a página do chat e a fila da equipe continuam acessíveis apenas localmente.
 
 Antes de começar:
 
