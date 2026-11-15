@@ -38,6 +38,36 @@ flowchart LR
 
 O chatbot identifica o cliente e coleta **nome, produto, telefone, endereço e forma de pagamento**. Depois mostra um resumo para o cliente confirmar e só então registra o pedido.
 
+## 🏗️ Arquitetura
+
+```mermaid
+flowchart LR
+    subgraph Canais["Canais (FastAPI)"]
+        W[Chat no navegador<br/>127.0.0.1:8000]
+        M[WhatsApp pela Meta<br/>127.0.0.1:8001]
+        H[WhatsApp pelo WAHA<br/>127.0.0.1:8002]
+    end
+    T[Chat no terminal] --> C
+    W --> C
+    M --> C
+    H --> C
+    C[Conversa<br/>motor do atendimento] --> I[IA: entende texto livre]
+    C --> R[Registro da venda]
+    C --> F[(Fila da equipe)]
+    R --> A{API RevGás}
+    A --> AF[Falsa: em memória,<br/>para testes e demo]
+    A --> AR[Real: ERP RevGás,<br/>só com --venda-real]
+```
+
+- **Canais:** cada forma de falar com o cliente é um pequeno servidor **FastAPI** (ligado pelo **uvicorn**) que só leva e traz texto. Todos escutam apenas em `127.0.0.1` e não registram as mensagens no log. O chat no terminal faz o mesmo papel, sem servidor.
+- **Conversa:** o motor do atendimento (`conversa/`). Não sabe de qual canal veio a mensagem; por isso trocar de canal não muda as regras.
+- **IA:** só **entende** o que o cliente escreveu (`ia/`). Preço, endereço e confirmação são sempre conferidos pelo chatbot.
+- **API RevGás:** há duas versões com a mesma "tomada" (`api_revgas/`):
+  - **falsa** (`ApiRevGasFalsa`): uma classe Python que guarda clientes e vendas na memória e imita as respostas do ERP. Não é um servidor nem usa FastAPI. É a padrão, nos testes e na demonstração;
+  - **real** (`ApiRevGasHttp`): chama `https://api.revgas.com/v1`. Só é usada quando o comando recebe `--venda-real`.
+- **Fila da equipe:** quando o atendimento passa para uma pessoa, a solicitação vai para `dados/` (fora do git), com página em `dados/fila.html`.
+- **Montagem:** `montagem.py` é o único lugar que liga as peças e escolhe a API falsa ou a real.
+
 ## 🚀 Como rodar
 
 Requisitos: Python 3.12+ e [uv](https://docs.astral.sh/uv/).
