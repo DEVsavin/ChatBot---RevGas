@@ -40,6 +40,17 @@ def numero_ficticio(numero: str) -> bool:
     return numero[2:4] == DDD_FICTICIO
 
 
+def com_nono_digito(numero: str) -> str:
+    """Celular brasileiro que chegou sem o 9 ganha o 9: "558681941234" -> "5586981941234".
+
+    12 dígitos (55 + DDD + 8) com o número começando em 6, 7, 8 ou 9 é celular.
+    Fixo (2 a 5) e o fictício (DDD 00, número começando em 0) não mudam.
+    """
+    if len(numero) == 12 and numero.startswith("55") and numero[4] in "6789":
+        return numero[:4] + "9" + numero[4:]
+    return numero
+
+
 def telefone_legivel(numero: str) -> str:
     """"5586999990000" -> "(86) 99999-0000"; "558633330000" -> "(86) 3333-0000"."""
     ddd, resto = numero[2:4], numero[4:]
@@ -165,3 +176,16 @@ def numero_do_endereco(texto: str) -> str | None:
     if encontrado is None:
         return None
     return encontrado.group(1) + (encontrado.group(2) or "").upper()
+
+
+# Problema 1 (conversas de 15/11): "já informei" não é um dado do endereço.
+_JA_INFORMADO = (
+    "ja informei", "ja falei", "ja disse", "ja mandei", "ja passei", "ja enviei", "ja coloquei",
+    "ali em cima", "la em cima", "como eu disse", "como eu falei", "como falei", "como disse",
+)
+
+
+def ja_informado(texto: str) -> bool:
+    """A pessoa diz que já mandou o dado ("já informei", "tá lá em cima")."""
+    mensagem = normalizar(texto)
+    return _contem(mensagem, _JA_INFORMADO)

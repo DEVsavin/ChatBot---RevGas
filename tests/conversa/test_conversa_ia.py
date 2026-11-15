@@ -110,12 +110,14 @@ def test_frase_completa_vai_direto_ao_resumo_com_preco_do_catalogo(conversa, api
     assert venda["location"] == "Rua Nova"
 
 
-def test_endereco_incompleto_na_frase_e_ignorado(conversa, ia):
+def test_endereco_incompleto_na_frase_pergunta_so_o_que_falta(conversa, ia):
+    # Problema 2 (15/11): o endereço parcial dito vale (antes era ignorado) e vence o do cadastro.
     frase = "2 botijões pra Rua Nova"
     ia.respostas[frase] = pedir(produto="botijão de gás", quantidade=2, endereco={"rua": "Rua Nova"})
     *_, resposta = dialogo(conversa, "sim", frase)
 
-    assert "Entregar em Rua Exemplo, 100" in texto(resposta)
+    assert "Entregar em Rua Exemplo, 100" not in texto(resposta)
+    assert resposta[-1] == "Qual é o número? (ou S/N)"
 
 
 def test_dinheiro_sem_troco_na_frase_pergunta_o_troco(conversa, ia):
@@ -388,3 +390,130 @@ def test_pergunta_reconhecida_pela_ia_no_nome(dependencias, ia):
     *_, resposta = dialogo(conversa, "sim", "tem como você ver aí pra mim")
 
     assert resposta[-1] == "Qual é o seu nome?"
+
+
+# --- Conversas reais pelo WAHA (2026-11-15): problemas 1 a 4 -----------------------------
+# Endereços inventados; números fictícios ou inventados.
+
+FRASE_PARCIAL = "quero 1 botijão pra rua das flores 123, bairo centro, teresina, pagamento no pix"
+PARCIAL = {"rua": "rua das flores", "numero": "123", "bairro": "centro", "cidade": "teresina"}
+
+
+def test_2_endereco_parcial_do_texto_livre_e_aproveitado_e_so_falta_o_estado(dependencias, ia):
+    ia.respostas[FRASE_PARCIAL] = pedir(produto="botijão de gás", quantidade=1, endereco=PARCIAL, pagamento="PIX")
+    conversa = Conversa(NOVO, dependencias)
+    *_, resposta = dialogo(conversa, "sim", "Fulano", FRASE_PARCIAL)
+
+    assert resposta[-1] == "Qual é o estado? (ex.: PI ou Piauí)"
+    assert "Qual é a rua?" not in texto(resposta)
+    resumo = conversa.responder("PI")
+    assert "Confira seu pedido:" in texto(resumo)  # complemento e referência não são perguntados
+    assert "rua das flores, 123 — centro, teresina, Piauí" in texto(resumo)
+
+
+def test_2_endereco_parcial_vence_o_endereco_do_cadastro(conversa, ia):
+    ia.respostas[FRASE_PARCIAL] = pedir(produto="botijão de gás", quantidade=1, endereco=PARCIAL, pagamento="PIX")
+    *_, resposta = dialogo(conversa, "sim", FRASE_PARCIAL)
+
+    assert "Entregar em Rua Exemplo" not in texto(resposta)
+    assert resposta[-1] == "Qual é o estado? (ex.: PI ou Piauí)"
+
+
+@pytest.mark.parametrize("reclamacao", ["eu ja informei tudo ali em cima", "já informei", "como eu disse antes",
+                                        "já falei", "ta la em cima"])
+def test_1_ja_informei_usa_o_endereco_dito_antes(dependencias, ia, reclamacao):
+    # O cliente pôs o endereço junto do nome; no passo da rua, diz que já informou.
+    frase = "Fulano, rua das flores 123, centro, teresina"
+    ia.respostas[frase] = Interpretacao(intencao="OUTRA", endereco=PARCIAL)
+    conversa = Conversa(NOVO, dependencias)
+    *_, pergunta_da_rua = dialogo(conversa, "sim", frase, "1", "1")
+    assert pergunta_da_rua[-1] == "Qual é a rua?"
+
+    resposta = conversa.responder(reclamacao)
+    assert resposta[-1] == "Qual é o estado? (ex.: PI ou Piauí)"
+    conversa.responder("PI")
+    assert "rua das flores, 123 — centro, teresina, Piauí" in texto(conversa.responder("1"))  # PIX → resumo
+
+
+@pytest.mark.parametrize("antes, reclamacao, pergunta", [
+    ((), "eu ja informei tudo ali em cima", "Qual é a rua?"),
+    (("Rua Nova",), "já informei", "Qual é o número? (ou S/N)"),
+    (("Rua Nova", "10"), "já falei", "Qual é o bairro?"),
+])
+def test_1_ja_informei_sem_endereco_anterior_explica_e_pergunta_de_novo(dependencias, antes, reclamacao, pergunta):
+    conversa = Conversa(NOVO, replace(dependencias, interpretador=None))
+    dialogo(conversa, "sim", "Fulano", "1", "1", *antes)
+    resposta = conversa.responder(reclamacao)
+
+    assert "não consegui aproveitar" in resposta[0]
+    assert "apartamento ou bloco" not in texto(resposta)
+    assert resposta[-1] == pergunta  # nada foi guardado: o mesmo campo de novo
+
+
+def test_1_ja_informei_nao_vira_rua_no_pedido(dependencias, api):
+    conversa = Conversa(NOVO, replace(dependencias, interpretador=None))
+    dialogo(conversa, "sim", "Fulano", "1", "1", "eu ja informei tudo ali em cima",
+            "Rua Nova", "10", "Centro", "Teresina", "PI", "pular", "pular", "1", "1")
+
+    [venda] = api.vendas_criadas()
+    assert venda["location"] == "Rua Nova"
+
+
+@pytest.mark.parametrize("canal, mostrado, salvo", [
+    ("558681941234", "(86) 98194-1234", "5586981941234"),  # celular sem o 9: ganha o 9
+    ("5586981941234", "(86) 98194-1234", "5586981941234"),
+    ("558632221234", "(86) 3222-1234", "558632221234"),  # fixo: não muda
+    ("550000000009", "(00) 0000-0009", "550000000009"),  # fictício: não muda
+])
+def test_3_celular_sem_o_9_e_mostrado_e_salvo_com_o_9(dependencias, api, canal, mostrado, salvo):
+    conversa = Conversa(canal, replace(dependencias, interpretador=None))
+    [saudacao] = dialogo(conversa)
+    assert f"Este número é seu: {mostrado}?" in texto(saudacao)
+
+    dialogo(conversa, "sim", "Fulano", "1", "1", "Rua Nova", "10", "Centro", "Teresina", "PI", "pular", "pular",
+            "1", "1")
+    assert len(api.vendas_criadas()) == 1
+    assert api.clientes[-1]["phones"] == [salvo]  # cliente novo cadastrado com o número certo
+
+
+def test_3_numero_digitado_sem_o_9_tambem_ganha_o_9(dependencias):
+    conversa = Conversa(NOVO, replace(dependencias, interpretador=None))
+    *_, resposta = dialogo(conversa, "não", "(86) 8194-1234")
+
+    assert "É este: (86) 98194-1234?" in texto(resposta)
+
+
+def _pedido_registrado(conversa):
+    dialogo(conversa, "sim", "1", "1", "sim", "1")
+    return conversa.responder("1")
+
+
+def test_4_pedido_registrado_diz_como_cancelar(conversa):
+    [mensagem] = _pedido_registrado(conversa)
+
+    assert mensagem.startswith("Pedido registrado!")
+    assert "Para cancelar ou mudar o pedido, escreva atendente." in mensagem
+
+
+def test_4_numero_solto_depois_do_pedido_explica_sem_recomecar(conversa, api):
+    _pedido_registrado(conversa)
+    resposta = conversa.responder("3")
+
+    assert not conversa.encerrada  # o canal mantém a conversa (não recomeça sozinho)
+    assert "já foi registrado" in texto(resposta)
+    assert "escreva atendente" in texto(resposta)
+    assert len(api.vendas_criadas()) == 1
+
+
+def test_4_cancelar_depois_do_pedido_transfere(conversa, api, fila):
+    _pedido_registrado(conversa)
+    resposta = conversa.responder("quero cancelar")
+
+    assert "ATD-" in texto(resposta)
+    assert len(api.vendas_criadas()) == 1
+
+
+def test_4_novo_pedido_depois_do_pedido_recomeca(conversa):
+    _pedido_registrado(conversa)
+
+    assert conversa.responder("novo pedido")[0].startswith("Olá! Sou o atendente virtual")

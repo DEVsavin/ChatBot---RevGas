@@ -104,7 +104,10 @@ def test_cliente_cadastrado_faz_pedido_completo(conversa, api):
     assert venda["customer_id"] == 77
     assert [p["quantity"] for p in venda["products"]] == [2]  # 1 linha, quantity 2 (M4)
     assert venda["payments"] == [{"payment_type": "PIX", "value": Decimal("220.00")}]
-    assert texto(confirmacao) == f"Pedido registrado! Número {venda['id']}, total R$ 220,00."
+    assert texto(confirmacao) == (
+        f"Pedido registrado! Número {venda['id']}, total R$ 220,00. "
+        "Para cancelar ou mudar o pedido, escreva atendente."
+    )
 
 
 # --- resposta que não serve: explica e repete a mesma pergunta ---------------------
@@ -360,7 +363,8 @@ def test_corrigir_produto_com_troco_que_ficou_menor_que_o_total_pergunta_o_troco
 def test_depois_de_encerrada_nada_e_enviado_e_oi_recomeca(conversa, api):
     *_, registrada, de_novo, oi = dialogo(conversa, *ATE_O_RESUMO, "1", "1", "oi")
 
-    assert texto(de_novo) == "Para um novo pedido, envie oi."
+    # Problema 4 (15/11): depois do pedido, um número solto explica em vez de recomeçar.
+    assert "já foi registrado" in texto(de_novo) and "escreva atendente" in texto(de_novo)
     assert len(api.vendas_criadas()) == 1
     assert "Este número é seu: (00) 90000-0001?" in texto(oi)
     dialogo_continuado = [conversa.responder(m) for m in ("sim", "1", "1", "sim", "1", "1")]

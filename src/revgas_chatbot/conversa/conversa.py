@@ -19,7 +19,9 @@ from typing import Callable
 from revgas_chatbot.api_revgas.api import TempoEsgotado
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.conversa.entrada import (
+    com_nono_digito,
     comando,
+    ja_informado,
     normalizar,
     numero_do_endereco,
     opcao,
@@ -127,7 +129,7 @@ class Conversa:
         """`numero_confiavel=False`: o número veio de alguém que pode digitar
         qualquer um (ex.: a página web com número real). A conversa o trata
         como número digitado (V1): não busca nem revela o cadastro."""
-        self._telefone_do_canal = telefone_do_canal
+        self._telefone_do_canal = com_nono_digito(telefone_do_canal)  # problema 3: mostra e salva com o 9
         self._numero_confiavel = numero_confiavel
         self._d = dependencias
         self._ultima_venda_id: int | None = None  # para "quero cancelar" depois da venda
@@ -149,6 +151,9 @@ class Conversa:
         self._troco: Decimal | None = None
         self._troco_respondido = False
         self._pedido_id = str(uuid.uuid4())
+        # Problemas 1 e 2: partes do endereço que a IA achou no que o cliente escreveu.
+        self._enderecos_ditos: dict[str, str] = {}  # tudo o que apareceu na conversa ("já informei")
+        self._endereco_do_texto: dict[str, str] | None = None  # dito junto do pedido: usado direto
 
     # --- interface -------------------------------------------------------------
 
@@ -219,7 +224,7 @@ class Conversa:
             return self._nao_entendeu(
                 texto, ["Não entendi o número. Envie com DDD, por exemplo (86) 99999-0000.", PERGUNTA_DO_NUMERO]
             )
-        self._telefone = numero
+        self._telefone = com_nono_digito(numero)
         self._passo = "CONFIRMAR_NUMERO_DIGITADO"
         return [self._pergunta_numero_digitado()]
 
@@ -280,14 +285,42 @@ class Conversa:
         self._endereco = self._endereco_do_cadastro
         return self._seguir()
 
-    def _comecar_endereco(self) -> list[str]:
+    def _comecar_endereco(self, ditos: dict[str, str] | None = None) -> list[str]:
         self._campos: dict[str, str | None] = {}
         self._passo = "CAMPO_DO_ENDERECO"
+        if ditos:
+            # Problema 2: usa o que o cliente já escreveu e pergunta só o que falta.
+            self._usar_campos(ditos)
+            if any(c[0] not in self._campos for c in CAMPOS_DO_ENDERECO):
+                return ["Anotei o endereço que você mandou.", self._pergunta_do_campo()]
+            return self._proximo_campo_ou_fim()
         return ["Agora o endereço de entrega.", self._pergunta_do_campo()]
+
+    def _usar_campos(self, ditos: dict[str, str]) -> None:
+        """Guarda os campos ditos; complemento e referência não ditos ficam vazios (não pergunta)."""
+        self._campos.update({k: v for k, v in ditos.items() if k not in self._campos})
+        for nome, _, opcional, _ in CAMPOS_DO_ENDERECO:
+            if opcional and nome not in self._campos:
+                self._campos[nome] = None
+
+    def _ja_informado(self, campo: str, pergunta: str) -> list[str]:
+        """Problema 1: "já informei" nunca vira dado; usa o endereço dito antes, se houver."""
+        faltam = {k: v for k, v in self._enderecos_ditos.items() if k not in self._campos}
+        if campo in faltam:
+            self._usar_campos(faltam)
+            return ["Certo, usei o endereço que você mandou antes.", *self._proximo_campo_ou_fim()]
+        rotulo, exemplo = ROTULOS_DOS_CAMPOS[campo]
+        return [
+            f"Desculpe, não consegui aproveitar o endereço da mensagem anterior. Me diga {rotulo} "
+            f"(ex.: {exemplo}). Se preferir, escreva atendente.",
+            pergunta,
+        ]
 
     def _passo_campo_do_endereco(self, texto: str) -> list[str]:
         campo, pergunta, opcional, explicacao = self._campo_atual()
         valor = " ".join(texto.split())
+        if valor and ja_informado(valor):
+            return self._ja_informado(campo, pergunta)
         if valor and normalizar(valor) != "pular":
             if campo == "logradouro":
                 # Rua (3.2): UMA consulta à IA serve para vazamento e para o endereço numa frase.
@@ -380,10 +413,13 @@ class Conversa:
             return ["Pedido descartado. Nada foi enviado."]
         resultado = self._d.registrador.registrar(self._pedido())
         if isinstance(resultado, VendaCriada):
-            self._passo = "ENCERRADA"
+            self._passo = "POS_VENDA"  # problema 4: a conversa continua (cancelar, novo pedido)
             self._ultima_venda_id = resultado.id
             # Sem entregador e sem prazo (RN9; a meta de 20 min não é prometida).
-            return [f"Pedido registrado! Número {resultado.id}, total {reais(resultado.total)}."]
+            return [
+                f"Pedido registrado! Número {resultado.id}, total {reais(resultado.total)}. "
+                "Para cancelar ou mudar o pedido, escreva atendente."
+            ]
         if isinstance(resultado, EmAndamento):
             return ["Seu pedido já está sendo registrado. Aguarde um instante."]
         if isinstance(resultado, PedidoInvalido):
@@ -466,6 +502,16 @@ class Conversa:
         self._passo = "RESUMO"
         return [self._resumo()]
 
+    def _passo_pos_venda(self, texto: str) -> list[str]:
+        """Depois do pedido registrado: um número solto não recomeça nada sem explicar."""
+        if normalizar(texto) in ("oi", "ola", "novo pedido", "novo", "outro pedido"):
+            self._novo_rascunho()
+            return self.iniciar()
+        return [
+            f"Seu pedido número {self._ultima_venda_id} já foi registrado. "
+            "Para cancelar ou mudar o pedido, escreva atendente. Para um novo pedido, escreva novo pedido."
+        ]
+
     def _passo_encerrada(self, texto: str) -> list[str]:
         if normalizar(texto) in ("oi", "ola"):
             self._novo_rascunho()
@@ -493,12 +539,15 @@ class Conversa:
             interpretacao = self._d.interpretador.interpretar(mascarar(texto), contexto)
             if interpretacao is None:
                 return None
-            return validar_interpretacao(
+            interpretado = validar_interpretacao(
                 interpretacao,
                 self._d.catalogo,
                 {t: ROTULOS_DE_PAGAMENTO[t] for t in self._formas},
                 texto=texto,  # I5: só vale parte do endereço que o cliente disse
             )
+            if interpretado.campos_do_endereco:
+                self._enderecos_ditos.update(interpretado.campos_do_endereco)  # para o "já informei"
+            return interpretado
         except Exception:  # noqa: BLE001 - a IA nunca derruba a conversa (C2-3)
             return None
 
@@ -530,6 +579,8 @@ class Conversa:
             self._quantidade = interpretado.quantidade
         if interpretado.endereco is not None:
             self._endereco = interpretado.endereco  # o endereço dito substitui o do cadastro
+        elif interpretado.campos_do_endereco:
+            self._endereco_do_texto = dict(interpretado.campos_do_endereco)  # parcial: pergunta o resto
         if interpretado.pagamento is not None:
             self._pagamento = interpretado.pagamento
             self._troco = interpretado.troco
@@ -542,6 +593,9 @@ class Conversa:
             self._passo = "QUANTIDADE"
             return ["Quantos?"]
         if self._endereco is None:
+            if self._endereco_do_texto:
+                ditos, self._endereco_do_texto = self._endereco_do_texto, None
+                return self._comecar_endereco(ditos)  # o dito vence o do cadastro
             if self._endereco_do_cadastro is not None:
                 self._passo = "ENDERECO_DO_CADASTRO"
                 return [self._pergunta_endereco_do_cadastro()]
