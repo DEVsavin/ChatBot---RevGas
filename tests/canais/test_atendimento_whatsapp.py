@@ -1,38 +1,22 @@
-"""Testes do WA3: WhatsApp de ponta a ponta, com a Meta simulada.
+"""Testes do atendimento pelo WhatsApp (o mesmo para qualquer canal de WhatsApp).
 
-Seam combinado: o webhook (criar_app_whatsapp) + AtendimentoWhatsApp, com
-mensagens assinadas, a API de teste da RevGás, uma IA falsa e um enviador
-falso no lugar da Graph API. Sem internet. Os números "da equipe" são
-inventados e nunca recebem nada.
+Seam: AtendimentoWhatsApp.receber(MensagemRecebida) — o que o receptor do
+WAHA entrega depois de conferir assinatura, filtros e repetidas (esses ficam
+em test_canal_waha.py) —, com a API de teste da RevGás, uma IA falsa e um
+enviador falso. Sem internet. Os números "da equipe" são inventados.
 """
 
-import hashlib
-import hmac
 import itertools
-import json
 from datetime import datetime
 
 import pytest
-from fastapi.testclient import TestClient
 
 from revgas_chatbot.api_revgas.api_falsa import RelogioFalso
-from revgas_chatbot.canais.canal_whatsapp import (
-    NAO_TEXTO,
-    AtendimentoWhatsApp,
-    ConfiguracaoInvalida,
-    configuracao,
-    criar_app_whatsapp,
-    main,
-    regra_da_ia,
-)
+from revgas_chatbot.canais.atendimento_whatsapp import NAO_TEXTO, AtendimentoWhatsApp, MensagemRecebida
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.ia.interpretacao import Interpretacao, InterpretadorFalso
-from revgas_chatbot.montagem import api_de_demonstracao, montar
+from revgas_chatbot.montagem import api_de_demonstracao, montar, regra_da_ia
 
-SEGREDO = "segredo-de-teste-do-app"
-VERIFY_TOKEN = "token-de-verificacao-de-teste-com-mais-de-32-caracteres"
-PHONE_NUMBER_ID = "100000000000001"
-DOMINIO = "exemplo-fixo.ngrok-free.app"
 MARIA = "5500900000001"  # cadastrada na API de teste
 EQUIPE = "5586999990000"  # inventado
 EQUIPE_SEM_9 = "558699990000"
@@ -54,7 +38,7 @@ class EnviadorFalso:
 
 
 class WhatsAppSimulado:
-    """Meta simulada: manda mensagens assinadas e espera o atendimento terminar."""
+    """Entrega mensagens ao atendimento, como o receptor faria, e espera ele terminar."""
 
     def __init__(self, tmp_path, *, ia=None, criar_conversa=None):
         self.api = api_de_demonstracao(RelogioFalso(datetime(2026, 11, 12, 15, 0, tzinfo=FUSO_TERESINA)))
@@ -65,24 +49,13 @@ class WhatsAppSimulado:
         self.enviador = EnviadorFalso()
         self.atendimento = AtendimentoWhatsApp(
             criar_conversa or (lambda tel: programa(tel, numero_confiavel=True)), self.enviador)
-        app = criar_app_whatsapp(receber=self.atendimento.receber, app_secret=SEGREDO,
-                                 verify_token=VERIFY_TOKEN, phone_number_id=PHONE_NUMBER_ID, dominio=DOMINIO)
-        self.cliente = TestClient(app, base_url=f"https://{DOMINIO}")
         self._ids = itertools.count(1)
         self.atendimento.ligar()
 
-    def mandar(self, texto, *, de=MARIA, id=None, tipo="text"):
-        id = id or f"wamid.{next(self._ids)}"
-        m = {"from": de, "id": id, "timestamp": "1762970000", "type": tipo}
-        m.update({"text": {"body": texto}} if tipo == "text" else {tipo: {"id": "1"}})
-        corpo = json.dumps({"object": "whatsapp_business_account", "entry": [{"changes": [{
-            "field": "messages",
-            "value": {"metadata": {"phone_number_id": PHONE_NUMBER_ID}, "messages": [m]}}]}]}).encode()
-        assinatura = "sha256=" + hmac.new(SEGREDO.encode(), corpo, hashlib.sha256).hexdigest()
-        r = self.cliente.post("/webhook", content=corpo, headers={"X-Hub-Signature-256": assinatura})
-        assert r.status_code == 200
+    def mandar(self, texto, *, de=MARIA, tipo="text"):
+        self.atendimento.receber(MensagemRecebida(
+            telefone=de, id=f"msg.{next(self._ids)}", texto=texto if tipo == "text" else None))
         self.atendimento.esperar()
-        return id
 
     def conversa(self, *textos, de=MARIA):
         for t in textos:
@@ -110,16 +83,6 @@ def test_pedido_completo_pelo_whatsapp(wa):
 
     assert respostas[-1].startswith("Pedido registrado!")
     assert len(wa.api.vendas_criadas()) == 1
-
-
-def test_sim_repetido_no_resumo_nao_registra_duas_vezes(wa):
-    wa.conversa("oi", "sim", "1", "2", "sim", "1")
-    id_do_sim = wa.mandar("1")
-    enviadas = len(wa.enviador.enviadas)
-    wa.mandar("1", id=id_do_sim)  # a Meta reentrega a mesma mensagem
-
-    assert len(wa.api.vendas_criadas()) == 1
-    assert len(wa.enviador.enviadas) == enviadas  # nenhuma resposta a mais
 
 
 def test_dois_telefones_intercalados_tem_conversas_separadas(wa):
@@ -270,81 +233,9 @@ def test_falha_no_envio_para_as_respostas_seguintes_e_o_atendimento_segue(wa):
     assert "Olá, Maria!" in "\n".join(wa.enviador.para(MARIA))
 
 
-# --- configuração e comando --------------------------------------------------------------
-
-
-AMBIENTE = {
-    "WHATSAPP_TOKEN": "token-ficticio",
-    "WHATSAPP_PHONE_NUMBER_ID": PHONE_NUMBER_ID,
-    "WHATSAPP_APP_SECRET": SEGREDO,
-    "WHATSAPP_VERIFY_TOKEN": VERIFY_TOKEN,
-    "WHATSAPP_NUMEROS_EQUIPE": "(86) 99999-0000, 5586977770000",
-    "WHATSAPP_DOMINIO": DOMINIO,
-}
-
-
-def test_configuracao_completa():
-    c = configuracao(AMBIENTE)
-
-    assert c.dominio == DOMINIO and c.phone_number_id == PHONE_NUMBER_ID
-    assert c.numeros_equipe == ("5586999990000", "5586977770000")
-
-
-@pytest.mark.parametrize("nome", sorted(AMBIENTE))
-def test_variavel_faltando_diz_o_nome_e_nunca_o_valor(nome):
-    ambiente = {**AMBIENTE, nome: "  "}
-    with pytest.raises(ConfiguracaoInvalida) as erro:
-        configuracao(ambiente)
-
-    assert nome in str(erro.value)
-    for valor in AMBIENTE.values():
-        assert valor.strip() not in str(erro.value)
-
-
-def test_verify_token_curto_e_recusado():
-    with pytest.raises(ConfiguracaoInvalida, match="WHATSAPP_VERIFY_TOKEN"):
-        configuracao({**AMBIENTE, "WHATSAPP_VERIFY_TOKEN": "curto"})
-
-
-@pytest.mark.parametrize("lista", ["123", "5586999990000, abc", "1,2,3,4,5,6"])
-def test_lista_da_equipe_invalida_e_recusada(lista):
-    with pytest.raises(ConfiguracaoInvalida, match="WHATSAPP_NUMEROS_EQUIPE"):
-        configuracao({**AMBIENTE, "WHATSAPP_NUMEROS_EQUIPE": lista})
-
-
-def test_comando_liga_so_em_127_0_0_1_na_porta_8001(tmp_path, capsys):
-    chamadas = []
-    main([], rodar=lambda app, **opcoes: chamadas.append(opcoes), pasta_dados=tmp_path, ambiente=AMBIENTE)
-
-    [opcoes] = chamadas
-    assert (opcoes["host"], opcoes["port"], opcoes["access_log"]) == ("127.0.0.1", 8001, False)
-    saida = capsys.readouterr().out
-    assert DOMINIO in saida
-    for segredo in (SEGREDO, VERIFY_TOKEN, "token-ficticio", "5586999990000"):
-        assert segredo not in saida
-
-
-def test_comando_sem_configuracao_nao_liga(tmp_path):
-    chamadas = []
-    with pytest.raises(SystemExit) as saida:
-        main([], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path, ambiente={})
-
-    assert chamadas == []
-    assert "WHATSAPP_TOKEN" in str(saida.value)
-
-
-def test_comando_nao_aceita_outro_endereco(tmp_path):
-    with pytest.raises(SystemExit):
-        main(["--host", "0.0.0.0"], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE)
-
-
-# --- M5 (D16/D17): venda real pelo WhatsApp, só com --venda-real -------------------------
+# --- M5 (D16/D17): venda real pelo WhatsApp -------------------------
 
 from revgas_chatbot.montagem import ConfigVendaReal  # noqa: E402
-
-AMBIENTE_REAL = {**AMBIENTE, "REVGAS_API_KEY": "chave-ficticia", "REVGAS_API_URL": "https://api.exemplo.test/v1",
-                 "REVGAS_CLIENTE_DEMO": "5700355"}
-
 
 def test_modo_real_pelo_whatsapp_nao_busca_cadastro_e_usa_o_cliente_fixo(tmp_path):
     api = api_de_demonstracao(RelogioFalso(datetime(2026, 11, 13, 15, 0, tzinfo=FUSO_TERESINA)))
@@ -360,27 +251,3 @@ def test_modo_real_pelo_whatsapp_nao_busca_cadastro_e_usa_o_cliente_fixo(tmp_pat
     assert respostas[-1].startswith("Pedido registrado!")
     assert api.operacoes == ["criar_venda"]
     assert api.vendas_criadas()[0]["customer_id"] == 5700355
-
-
-def test_comando_whatsapp_com_venda_real_avisa(tmp_path, capsys):
-    main(["--venda-real"], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
-
-    saida = capsys.readouterr().out
-    assert "VENDA REAL LIGADA" in saida
-    assert "chave-ficticia" not in saida
-
-
-def test_comando_whatsapp_sem_venda_real_nao_liga(tmp_path, capsys):
-    main([], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
-
-    assert "VENDA REAL" not in capsys.readouterr().out
-
-
-def test_comando_whatsapp_venda_real_sem_cliente_demo_nao_liga(tmp_path):
-    chamadas = []
-    with pytest.raises(SystemExit) as erro:
-        main(["--venda-real"], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path,
-             ambiente={**AMBIENTE_REAL, "REVGAS_CLIENTE_DEMO": ""})
-
-    assert chamadas == []
-    assert "REVGAS_CLIENTE_DEMO" in str(erro.value)

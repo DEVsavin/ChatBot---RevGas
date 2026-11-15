@@ -8,7 +8,7 @@ Antes de ler o corpo: `Host`, tamanho (até 256 KB) e assinatura
 `X-Webhook-Hmac` (HMAC-SHA512 do corpo cru com `WAHA_HMAC_KEY`). Depois, só
 passa mensagem de texto de uma pessoa (nada de grupo, status, canal ou do
 próprio chip), de número brasileiro atendido, recente e ainda não vista.
-O atendimento é o mesmo do canal da Meta (`AtendimentoWhatsApp`).
+O atendimento fica em `atendimento_whatsapp.py`.
 
     ./scripts/whatsapp-waha.sh            (sobe o WAHA e este servidor)
     uv run --env-file .env python -m revgas_chatbot.canais.canal_waha [--venda-real]
@@ -30,7 +30,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from revgas_chatbot.api_revgas.api import Relogio
-from revgas_chatbot.canais.canal_whatsapp import AtendimentoWhatsApp, MensagemRecebida, _IdsVistos
+from revgas_chatbot.canais.atendimento_whatsapp import AtendimentoWhatsApp, IdsVistos, MensagemRecebida
 from revgas_chatbot.canais.cliente_waha import ClienteWaha, _url_local, digitos_do_chat
 from revgas_chatbot.conversa.entrada import telefone
 from revgas_chatbot.montagem import (
@@ -44,7 +44,7 @@ from revgas_chatbot.montagem import (
 __all__ = ["ConfiguracaoInvalida", "configuracao_waha", "criar_app_waha", "main"]
 
 HOST = "127.0.0.1"
-PORTA = 8002  # D-WAHA-2 (8000 = chat web, 8001 = Meta)
+PORTA = 8002  # D-WAHA-2 (8000 = chat web)
 MAX_CORPO = 256 * 1024
 IDADE_MAXIMA = 10 * 60  # segundos: mensagem mais velha que isso é ignorada
 MIN_HMAC = 32
@@ -74,7 +74,7 @@ def criar_app_waha(
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     hosts_permitidos = {f"host.docker.internal:{porta}", f"127.0.0.1:{porta}", f"localhost:{porta}"}
-    vistos = _IdsVistos(ids_lembrados)
+    vistos = IdsVistos(ids_lembrados)
 
     @app.middleware("http")
     async def so_hosts_conhecidos(request: Request, proximo):

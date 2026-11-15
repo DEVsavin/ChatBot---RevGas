@@ -67,7 +67,7 @@ AVISO_VENDA_REAL = (
     "VENDA REAL LIGADA: cada pedido confirmado cria uma venda no estabelecimento "
     f"{ESTABELECIMENTO} (cliente de demonstração, sem avisar entregadores)."
 )
-MAX_EQUIPE = 5  # destinatários de teste da Meta (W12)
+MAX_EQUIPE = 5  # números da equipe que usam a IA (W2)
 
 
 class ConfiguracaoInvalida(ValueError):

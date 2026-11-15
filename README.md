@@ -75,7 +75,6 @@ Servidores só nesta máquina, mensagens do WhatsApp com assinatura conferida, n
 - [Chat no navegador](#-chat-no-navegador)
 - [Roteiro de demonstração](#-roteiro-de-demonstração)
 - [WhatsApp pelo chip (WAHA)](#-whatsapp-pelo-chip-waha)
-- [WhatsApp (Cloud API da Meta)](#-whatsapp-cloud-api-da-meta)
 - [Venda real no ERP](#-venda-real-no-erp)
 - [Equipe](#-equipe)
 
@@ -108,12 +107,10 @@ O chatbot identifica o cliente e coleta **nome, produto, telefone, endereço e f
 flowchart LR
     subgraph Canais["Canais (FastAPI)"]
         W[Chat no navegador<br/>127.0.0.1:8000]
-        M[WhatsApp pela Meta<br/>127.0.0.1:8001]
         H[WhatsApp pelo WAHA<br/>127.0.0.1:8002]
     end
     T[Chat no terminal] --> C
     W --> C
-    M --> C
     H --> C
     C[Conversa<br/>motor do atendimento] --> I[IA: entende texto livre]
     C --> R[Registro da venda]
@@ -138,11 +135,10 @@ flowchart LR
 |---|---|---|
 | 🐍 | **Python 3.12+** e **[uv](https://docs.astral.sh/uv/)** | Linguagem, ambiente e dependências |
 | ⚡ | **FastAPI** e **uvicorn** | Servidores dos canais |
-| 🌐 | **httpx** | Chamadas às APIs externas (ERP RevGás, Gemini, Meta e WAHA) |
+| 🌐 | **httpx** | Chamadas às APIs externas (ERP RevGás, Gemini e WAHA) |
 | 🧪 | **pytest** | Testes automatizados |
 | 🧠 | **Gemini** (Google AI Studio, cota grátis) | IA que entende texto livre |
 | 🐳 | **WAHA** no **Docker** | WhatsApp pelo chip |
-| 📱 | **Cloud API do WhatsApp** (Meta) e **ngrok** | WhatsApp oficial |
 
 ## 📁 Estrutura de pastas
 
@@ -151,7 +147,7 @@ config/                  catálogo com preços, formas de pagamento e orientaç�
 scripts/
 └── whatsapp-waha.sh     liga o WAHA no Docker e o chatbot com um comando
 src/revgas_chatbot/
-├── canais/              terminal, navegador, WhatsApp pela Meta e pelo WAHA
+├── canais/              terminal, navegador e WhatsApp (WAHA)
 ├── conversa/            motor do atendimento e regras do que o cliente digita
 ├── ia/                  interpretação de texto livre (Gemini) e sua validação
 ├── vendas/              pedido, validação, registro da venda e script da venda de teste
@@ -172,7 +168,6 @@ docker-compose.waha.yml  contêiner do WAHA
 | Testes, chat no terminal e no navegador | Python 3.12+ e [uv](https://docs.astral.sh/uv/) |
 | IA (texto livre) | Chave do Gemini no `.env` |
 | WhatsApp pelo chip | Docker Desktop e um chip separado |
-| WhatsApp pela Meta | App na Meta e ngrok com domínio fixo |
 | Venda real no ERP | Chave da API RevGás e o cliente de demonstração (`REVGAS_CLIENTE_DEMO`) no `.env` |
 
 ### Instalação
@@ -195,8 +190,6 @@ cp .env.example .env
 |---|---|
 | `GEMINI_API_KEY` | IA que entende texto livre (opcional) |
 | `REVGAS_API_KEY`, `REVGAS_API_URL`, `REVGAS_CLIENTE_DEMO` | Venda real no ERP (só com `--venda-real`) |
-| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_DOMINIO` | Canal WhatsApp |
-| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Só referência da conta na Meta; o programa não usa |
 | `WHATSAPP_NUMEROS_EQUIPE` | Até 5 celulares da equipe, separados por vírgula: só eles (e os números fictícios) usam a IA |
 | `WAHA_URL`, `WAHA_SESSAO`, `WAHA_API_KEY`, `WAHA_HMAC_KEY`, `WAHA_DASHBOARD_USERNAME`, `WAHA_DASHBOARD_PASSWORD`, `WAHA_ATENDER` | WhatsApp pelo chip (WAHA); veja a seção abaixo |
 
@@ -266,7 +259,7 @@ Pelo chat no terminal (ou no navegador, digitando o mesmo telefone):
 
 ## 📲 WhatsApp pelo chip (WAHA)
 
-O chatbot atende pelo WhatsApp de um **chip comum**, usando o [WAHA](https://waha.devlike.pro/) (WhatsApp HTTP API) num contêiner Docker. O WAHA e o chatbot rodam só nesta máquina (`127.0.0.1:3000` e `127.0.0.1:8002`); não precisa de ngrok.
+O chatbot atende pelo WhatsApp de um **chip comum**, usando o [WAHA](https://waha.devlike.pro/) (WhatsApp HTTP API) num contêiner Docker. O WAHA e o chatbot rodam só nesta máquina (`127.0.0.1:3000` e `127.0.0.1:8002`).
 
 > [!WARNING]
 > O WAHA não é a API oficial do WhatsApp: use um **chip separado**, que possa ser bloqueado sem prejuízo.
@@ -304,43 +297,6 @@ O WAHA, dentro do Docker, chama o chatbot pelo endereço `host.docker.internal:8
 
 </details>
 
-## 📱 WhatsApp (Cloud API da Meta)
-
-O chatbot também atende pelo WhatsApp usando a Cloud API da Meta, com o número de teste dela. O programa roda nesta máquina (`127.0.0.1:8001`) e o [ngrok](https://ngrok.com/) leva até ele as mensagens que a Meta envia. Só a rota `/webhook` passa pelo túnel: a página do chat e a fila da equipe continuam acessíveis apenas localmente.
-
-<details>
-<summary><b>Ver o passo a passo</b></summary>
-
-Antes de começar:
-
-- um app na Meta com o produto WhatsApp, e os valores de `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` e `WHATSAPP_APP_SECRET` no `.env`;
-- os celulares da equipe cadastrados como destinatários de teste no painel da Meta (o número de teste só conversa com eles) e listados em `WHATSAPP_NUMEROS_EQUIPE`;
-- o ngrok instalado, com um domínio fixo gratuito salvo em `WHATSAPP_DOMINIO` (só o domínio, sem `https://`);
-- `WHATSAPP_VERIFY_TOKEN` com pelo menos 32 caracteres. Para gerar um:
-
-```bash
-uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-Ligue o programa e o túnel, cada um num terminal:
-
-```bash
-uv run --env-file .env python -m revgas_chatbot.canais.canal_whatsapp
-```
-
-```bash
-ngrok http 8001 --url=https://<seu-dominio>
-```
-
-No painel da Meta, em **WhatsApp → Configuração → Webhook**, use `https://<seu-dominio>/webhook` como URL de retorno, o valor de `WHATSAPP_VERIFY_TOKEN` como token de verificação, e assine o campo **messages**. Depois, mande "oi" de um celular da equipe para o número de teste.
-
-- O número que chega pelo WhatsApp é tratado como o número do cliente.
-- Antes de ler qualquer mensagem, o programa confere a assinatura da Meta; mensagens sem assinatura válida são recusadas.
-- O token temporário da Meta vence em 24 horas. Se aparecer `token do WhatsApp recusado (401)`, gere outro no painel e troque no `.env`.
-- Sem `--venda-real`, os pedidos vão para a API de teste.
-
-</details>
-
 ## 🧾 Venda real no ERP
 
 Por padrão, todos os canais usam a API de teste. Com a opção `--venda-real`, cada pedido confirmado pelo cliente cria uma venda de verdade no ERP RevGás (estabelecimento 2580):
@@ -348,7 +304,7 @@ Por padrão, todos os canais usam a API de teste. Com a opção `--venda-real`, 
 ```bash
 uv run --env-file .env python -m revgas_chatbot.canais.chat_terminal --venda-real
 uv run --env-file .env python -m revgas_chatbot.canais.canal_web --venda-real
-uv run --env-file .env python -m revgas_chatbot.canais.canal_whatsapp --venda-real
+./scripts/whatsapp-waha.sh --venda-real
 ```
 
 > [!CAUTION]

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from revgas_chatbot.api_revgas.api_falsa import RelogioFalso
 from revgas_chatbot.canais.canal_waha import ConfiguracaoInvalida, configuracao_waha, criar_app_waha, main
-from revgas_chatbot.canais.canal_whatsapp import NAO_TEXTO, AtendimentoWhatsApp, MensagemRecebida
+from revgas_chatbot.canais.atendimento_whatsapp import NAO_TEXTO, AtendimentoWhatsApp, MensagemRecebida
 from revgas_chatbot.canais.cliente_waha import ClienteWaha
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.montagem import api_de_demonstracao, montar
