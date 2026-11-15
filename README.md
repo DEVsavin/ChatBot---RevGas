@@ -11,6 +11,24 @@
 
 ---
 
+## Sumário
+
+- [Sobre](#-sobre)
+- [Objetivos](#-objetivos)
+- [Como funciona](#-como-funciona)
+- [Arquitetura](#-arquitetura)
+- [Tecnologias](#-tecnologias)
+- [Estrutura de pastas](#-estrutura-de-pastas)
+- [Como rodar](#-como-rodar)
+- [Testes](#-testes)
+- [Chat no terminal](#-chat-no-terminal)
+- [Chat no navegador](#-chat-no-navegador)
+- [Roteiro de demonstração](#-roteiro-de-demonstração)
+- [WhatsApp pelo chip (WAHA)](#-whatsapp-pelo-chip-waha)
+- [WhatsApp (Cloud API da Meta)](#-whatsapp-cloud-api-da-meta)
+- [Venda real no ERP](#-venda-real-no-erp)
+- [Equipe](#-equipe)
+
 ## 📌 Sobre
 
 O **Chatbot RevGás** automatiza o atendimento aos clientes das revendas de GLP. O cliente faz o pedido numa conversa pelo WhatsApp, e o chatbot coleta os dados e registra a venda direto no **ERP RevGás**. Quando necessário, o atendimento passa para uma pessoa.
@@ -38,7 +56,7 @@ flowchart LR
 
 O chatbot identifica o cliente e coleta **nome, produto, telefone, endereço e forma de pagamento**. Depois mostra um resumo para o cliente confirmar e só então registra o pedido.
 
-## 🏗️ Arquitetura
+## 🧱 Arquitetura
 
 ```mermaid
 flowchart LR
@@ -60,26 +78,62 @@ flowchart LR
 ```
 
 - **Canais:** cada forma de falar com o cliente é um pequeno servidor **FastAPI** (ligado pelo **uvicorn**) que só leva e traz texto. Todos escutam apenas em `127.0.0.1` e não registram as mensagens no log. O chat no terminal faz o mesmo papel, sem servidor.
-- **Conversa:** o motor do atendimento (`conversa/`). Não sabe de qual canal veio a mensagem; por isso trocar de canal não muda as regras.
-- **IA:** só **entende** o que o cliente escreveu (`ia/`). Preço, endereço e confirmação são sempre conferidos pelo chatbot.
-- **API RevGás:** há duas versões com a mesma "tomada" (`api_revgas/`):
+- **Conversa:** o motor do atendimento ([`src/revgas_chatbot/conversa/`](src/revgas_chatbot/conversa/)). Não sabe de qual canal veio a mensagem; por isso trocar de canal não muda as regras.
+- **IA:** só **entende** o que o cliente escreveu ([`src/revgas_chatbot/ia/`](src/revgas_chatbot/ia/)). Preço, endereço e confirmação são sempre conferidos pelo chatbot.
+- **API RevGás:** há duas versões com a mesma "tomada" ([`src/revgas_chatbot/api_revgas/`](src/revgas_chatbot/api_revgas/)):
   - **falsa** (`ApiRevGasFalsa`): uma classe Python que guarda clientes e vendas na memória e imita as respostas do ERP. Não é um servidor nem usa FastAPI. É a padrão, nos testes e na demonstração;
   - **real** (`ApiRevGasHttp`): chama `https://api.revgas.com/v1`. Só é usada quando o comando recebe `--venda-real`.
 - **Fila da equipe:** quando o atendimento passa para uma pessoa, a solicitação vai para `dados/` (fora do git), com página em `dados/fila.html`.
-- **Montagem:** `montagem.py` é o único lugar que liga as peças e escolhe a API falsa ou a real.
+- **Montagem:** [`src/revgas_chatbot/montagem.py`](src/revgas_chatbot/montagem.py) é o único lugar que liga as peças e escolhe a API falsa ou a real.
+
+## 🧰 Tecnologias
+
+- **Python 3.12+** com **[uv](https://docs.astral.sh/uv/)** para o ambiente e as dependências
+- **FastAPI** e **uvicorn** para os servidores dos canais
+- **httpx** para chamar as APIs externas (ERP RevGás, Gemini, Meta e WAHA)
+- **pytest** para os testes automatizados
+- **Gemini** (Google AI Studio, cota grátis) para a IA que entende texto livre
+- **WAHA** no **Docker** para o WhatsApp pelo chip
+- **Cloud API do WhatsApp** (Meta) com **ngrok** para o WhatsApp oficial
+
+## 📁 Estrutura de pastas
+
+```text
+config/                  catálogo com preços, formas de pagamento e orientações de vazamento
+scripts/
+└── whatsapp-waha.sh     liga o WAHA no Docker e o chatbot com um comando
+src/revgas_chatbot/
+├── canais/              terminal, navegador, WhatsApp pela Meta e pelo WAHA
+├── conversa/            motor do atendimento e regras do que o cliente digita
+├── ia/                  interpretação de texto livre (Gemini) e sua validação
+├── vendas/              pedido, validação, registro da venda e script da venda de teste
+├── api_revgas/          API RevGás: interface, versão falsa, versão real e limite de 1 req/s
+├── atendimento/         fila de solicitações para a equipe e sua página
+├── devolucao/           busca de pedidos e solicitação de devolução (ainda não ligada aos canais)
+└── montagem.py          liga as peças e escolhe a API falsa ou a real
+tests/                   testes, na mesma divisão de pastas do código
+docker-compose.waha.yml  contêiner do WAHA
+```
 
 ## 🚀 Como rodar
 
-Requisitos: Python 3.12+ e [uv](https://docs.astral.sh/uv/).
+### Pré-requisitos
+
+| Para usar | Precisa de |
+|---|---|
+| Testes, chat no terminal e no navegador | Python 3.12+ e [uv](https://docs.astral.sh/uv/) |
+| IA (texto livre) | Chave do Gemini no `.env` |
+| WhatsApp pelo chip | Docker Desktop e um chip separado |
+| WhatsApp pela Meta | App na Meta e ngrok com domínio fixo |
+| Venda real no ERP | Chave da API RevGás e o cliente de demonstração (`REVGAS_CLIENTE_DEMO`) no `.env` |
+
+### Instalação
 
 ```bash
 git clone https://github.com/DEVsavin/ChatBot---RevGas.git
 cd ChatBot---RevGas
 uv sync
-uv run pytest
 ```
-
-Os testes usam uma API falsa e não acessam a internet.
 
 ### Arquivo `.env`
 
@@ -100,7 +154,15 @@ cp .env.example .env
 
 O `.env` está no `.gitignore` e **nunca** deve ser enviado ao repositório.
 
-## 🗨️ Chat de teste (terminal)
+## 🧪 Testes
+
+```bash
+uv run pytest
+```
+
+Os testes usam a API RevGás falsa e uma IA falsa: não acessam a internet e não precisam do `.env`.
+
+## 💻 Chat no terminal
 
 ```bash
 uv run python -m revgas_chatbot.canais.chat_terminal --telefone 5500900000001
@@ -125,7 +187,7 @@ uv run --env-file .env python -m revgas_chatbot.canais.chat_terminal --telefone 
 - Sem a chave, sem internet ou se a IA não responder em 8 segundos, o chat segue o roteiro normal.
 - Na cota grátis o Google pode usar as mensagens: por isso a IA só atende os números fictícios (DDD `00`) e os da equipe (`WHATSAPP_NUMEROS_EQUIPE`). Para clientes reais será preciso um plano pago.
 
-### Chat no navegador
+## 🌐 Chat no navegador
 
 ```bash
 uv run python -m revgas_chatbot.canais.canal_web                      # sem IA
@@ -139,7 +201,9 @@ Abra **http://127.0.0.1:8000**, digite um telefone de demonstração e converse.
 - Qualquer outro número é tratado como digitado: o chatbot pede nome e endereço, não mostra nenhum cadastro e só usa a IA se for um número da equipe.
 - `--porta 8080` muda a porta, se a 8000 estiver ocupada.
 
-### Roteiro de demonstração
+## 🎬 Roteiro de demonstração
+
+Pelo chat no terminal (ou no navegador, digitando o mesmo telefone):
 
 1. **Pedido completo (cliente cadastrado):** `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar).
 2. **Cliente novo com correção:** `--telefone 5500900000002` → `sim` → nome → `1` → `1` → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar).
