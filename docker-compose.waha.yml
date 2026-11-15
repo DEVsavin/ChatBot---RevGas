@@ -22,6 +22,8 @@ services:
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?falta WAHA_DASHBOARD_PASSWORD no .env}
       WHATSAPP_SWAGGER_USERNAME: ${WAHA_DASHBOARD_USERNAME}
       WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      # Motor GOWS: o padrão (WEBJS) falhou ao parear o chip em 15/11 ("não foi possível conectar").
+      WHATSAPP_DEFAULT_ENGINE: GOWS
       WHATSAPP_START_SESSION: ${WAHA_SESSAO:-default}
       WHATSAPP_RESTART_ALL_SESSIONS: "True"
       WHATSAPP_HOOK_URL: http://host.docker.internal:8002/webhook
