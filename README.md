@@ -2,18 +2,68 @@
 
 # 🔥 Chatbot RevGás
 
-**Inteligência artificial no atendimento do mercado de gás de cozinha (GLP).**
+**Inteligência artificial no atendimento do mercado de gás de cozinha (GLP).**<br/>
+Do pedido no WhatsApp até a venda registrada no ERP RevGás.
 
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![uv](https://img.shields.io/badge/uv-DE5FE9?logo=uv&logoColor=white)
+![pytest](https://img.shields.io/badge/testes-pytest-0A9EDC?logo=pytest&logoColor=white)
+![WhatsApp](https://img.shields.io/badge/WhatsApp-25D366?logo=whatsapp&logoColor=white)
+![Gemini](https://img.shields.io/badge/IA-Gemini-8E75B2?logo=googlegemini&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 ![Projeto de Extensão](https://img.shields.io/badge/Projeto%20de%20Extens%C3%A3o%20VI-2026.2-blueviolet)
+
+[Sobre](#-sobre) · [Como rodar](#-como-rodar) · [Demonstração](#-roteiro-de-demonstração) · [Arquitetura](#-arquitetura) · [WhatsApp](#-whatsapp-pelo-chip-waha)
 
 </div>
 
 ---
 
-## Sumário
+## 📌 Sobre
+
+O **Chatbot RevGás** automatiza o atendimento aos clientes das revendas de GLP. O cliente faz o pedido numa conversa pelo WhatsApp, e o chatbot coleta os dados e registra a venda direto no **ERP RevGás**. Quando necessário, o atendimento passa para uma pessoa.
+
+> Projeto desenvolvido na disciplina **Projeto de Extensão VI (Transformação Digital, 2026.2)**.
+
+## ✨ Destaques
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🛒 Pedido completo na conversa
+Nome, produto, quantidade, endereço e pagamento, uma pergunta por vez. Só registra a venda depois que o cliente confirma o resumo.
+
+</td>
+<td width="50%" valign="top">
+
+### 🧠 IA que entende texto livre
+*"manda 2 botijão pra Rua Nova 10, pago no pix"* vira pedido. A IA só entende: preço e endereço são sempre conferidos pelo chatbot.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🙋 Uma pessoa sempre ao alcance
+"quero falar com um atendente" ou "cheiro de gás" abre uma solicitação na fila da equipe, e o vazamento chega como **URGENTE**.
+
+</td>
+<td width="50%" valign="top">
+
+### 🛡️ Seguro por padrão
+Servidores só nesta máquina, mensagens do WhatsApp com assinatura conferida, nada da conversa no log e venda real só quando você liga.
+
+</td>
+</tr>
+</table>
+
+<details>
+<summary><b>📑 Sumário completo</b></summary>
 
 - [Sobre](#-sobre)
+- [Destaques](#-destaques)
 - [Objetivos](#-objetivos)
 - [Como funciona](#-como-funciona)
 - [Arquitetura](#-arquitetura)
@@ -29,11 +79,7 @@
 - [Venda real no ERP](#-venda-real-no-erp)
 - [Equipe](#-equipe)
 
-## 📌 Sobre
-
-O **Chatbot RevGás** automatiza o atendimento aos clientes das revendas de GLP. O cliente faz o pedido numa conversa pelo WhatsApp, e o chatbot coleta os dados e registra a venda direto no **ERP RevGás**. Quando necessário, o atendimento passa para uma pessoa.
-
-> Projeto desenvolvido na disciplina **Projeto de Extensão VI (Transformação Digital, 2026.2)**.
+</details>
 
 ## 🎯 Objetivos
 
@@ -88,13 +134,15 @@ flowchart LR
 
 ## 🧰 Tecnologias
 
-- **Python 3.12+** com **[uv](https://docs.astral.sh/uv/)** para o ambiente e as dependências
-- **FastAPI** e **uvicorn** para os servidores dos canais
-- **httpx** para chamar as APIs externas (ERP RevGás, Gemini, Meta e WAHA)
-- **pytest** para os testes automatizados
-- **Gemini** (Google AI Studio, cota grátis) para a IA que entende texto livre
-- **WAHA** no **Docker** para o WhatsApp pelo chip
-- **Cloud API do WhatsApp** (Meta) com **ngrok** para o WhatsApp oficial
+| | Tecnologia | Para quê |
+|---|---|---|
+| 🐍 | **Python 3.12+** e **[uv](https://docs.astral.sh/uv/)** | Linguagem, ambiente e dependências |
+| ⚡ | **FastAPI** e **uvicorn** | Servidores dos canais |
+| 🌐 | **httpx** | Chamadas às APIs externas (ERP RevGás, Gemini, Meta e WAHA) |
+| 🧪 | **pytest** | Testes automatizados |
+| 🧠 | **Gemini** (Google AI Studio, cota grátis) | IA que entende texto livre |
+| 🐳 | **WAHA** no **Docker** | WhatsApp pelo chip |
+| 📱 | **Cloud API do WhatsApp** (Meta) e **ngrok** | WhatsApp oficial |
 
 ## 📁 Estrutura de pastas
 
@@ -152,7 +200,8 @@ cp .env.example .env
 | `WHATSAPP_NUMEROS_EQUIPE` | Até 5 celulares da equipe, separados por vírgula: só eles (e os números fictícios) usam a IA |
 | `WAHA_URL`, `WAHA_SESSAO`, `WAHA_API_KEY`, `WAHA_HMAC_KEY`, `WAHA_DASHBOARD_USERNAME`, `WAHA_DASHBOARD_PASSWORD`, `WAHA_ATENDER` | WhatsApp pelo chip (WAHA); veja a seção abaixo |
 
-O `.env` está no `.gitignore` e **nunca** deve ser enviado ao repositório.
+> [!IMPORTANT]
+> O `.env` está no `.gitignore` e **nunca** deve ser enviado ao repositório.
 
 ## 🧪 Testes
 
@@ -160,7 +209,8 @@ O `.env` está no `.gitignore` e **nunca** deve ser enviado ao repositório.
 uv run pytest
 ```
 
-Os testes usam a API RevGás falsa e uma IA falsa: não acessam a internet e não precisam do `.env`.
+> [!NOTE]
+> Os testes usam a API RevGás falsa e uma IA falsa: não acessam a internet e não precisam do `.env`.
 
 ## 💻 Chat no terminal
 
@@ -205,16 +255,20 @@ Abra **http://127.0.0.1:8000**, digite um telefone de demonstração e converse.
 
 Pelo chat no terminal (ou no navegador, digitando o mesmo telefone):
 
-1. **Pedido completo (cliente cadastrado):** `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar).
-2. **Cliente novo com correção:** `--telefone 5500900000002` → `sim` → nome → `1` → `1` → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar).
-3. **Transferência para a equipe:** em qualquer momento, envie `quero falar com um atendente` ou `estou sentindo cheiro de gás` e veja a solicitação em `dados/fila.html` (o vazamento aparece como URGENTE, no topo).
+| # | Cenário | O que digitar |
+|---|---|---|
+| 1 | **Pedido completo** (cliente cadastrado) | `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar) |
+| 2 | **Cliente novo com correção** | `--telefone 5500900000002` → `sim` → nome → `1` → `1` → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar) |
+| 3 | **Transferência para a equipe** | Em qualquer momento, `quero falar com um atendente` ou `estou sentindo cheiro de gás`; a solicitação aparece em `dados/fila.html` (o vazamento como URGENTE, no topo) |
 
+> [!NOTE]
 > As orientações de segurança para vazamento (`config/seguranca.txt`) são provisórias e ainda serão validadas com a revenda.
 
 ## 📲 WhatsApp pelo chip (WAHA)
 
 O chatbot atende pelo WhatsApp de um **chip comum**, usando o [WAHA](https://waha.devlike.pro/) (WhatsApp HTTP API) num contêiner Docker. O WAHA e o chatbot rodam só nesta máquina (`127.0.0.1:3000` e `127.0.0.1:8002`); não precisa de ngrok.
 
+> [!WARNING]
 > O WAHA não é a API oficial do WhatsApp: use um **chip separado**, que possa ser bloqueado sem prejuízo.
 
 ### Passo a passo
@@ -240,16 +294,22 @@ O chatbot atende pelo WhatsApp de um **chip comum**, usando o [WAHA](https://wah
 - **A sessão do WhatsApp** fica em `dados/waha-sessoes` (fora do git). Essa pasta dá acesso ao WhatsApp do chip: não compartilhe. Para desconectar o chip de vez, desligue o WAHA e apague a pasta.
 - **Venda real:** `./scripts/whatsapp-waha.sh --venda-real` (veja a seção **Venda real no ERP**).
 
-### Se o WAHA não alcançar o chatbot (plano B)
+<details>
+<summary><b>🆘 Se o WAHA não alcançar o chatbot (plano B)</b></summary>
 
 O WAHA, dentro do Docker, chama o chatbot pelo endereço `host.docker.internal:8002`. Isso funciona no Docker Desktop; se a checagem do passo 2 falhar, as mensagens não chegam. Nesse caso:
 
 1. Confira se é o **Docker Desktop** que está rodando (não o Docker "puro" do Linux) e rode o comando de novo.
 2. Se continuar falhando, o plano B é rodar o chatbot também dentro do Docker, no mesmo compose do WAHA. Peça à equipe do projeto; enquanto isso, a demonstração pode ser feita pelo **chat no navegador**.
 
+</details>
+
 ## 📱 WhatsApp (Cloud API da Meta)
 
 O chatbot também atende pelo WhatsApp usando a Cloud API da Meta, com o número de teste dela. O programa roda nesta máquina (`127.0.0.1:8001`) e o [ngrok](https://ngrok.com/) leva até ele as mensagens que a Meta envia. Só a rota `/webhook` passa pelo túnel: a página do chat e a fila da equipe continuam acessíveis apenas localmente.
+
+<details>
+<summary><b>Ver o passo a passo</b></summary>
 
 Antes de começar:
 
@@ -279,6 +339,8 @@ No painel da Meta, em **WhatsApp → Configuração → Webhook**, use `https://
 - O token temporário da Meta vence em 24 horas. Se aparecer `token do WhatsApp recusado (401)`, gere outro no painel e troque no `.env`.
 - Sem `--venda-real`, os pedidos vão para a API de teste.
 
+</details>
+
 ## 🧾 Venda real no ERP
 
 Por padrão, todos os canais usam a API de teste. Com a opção `--venda-real`, cada pedido confirmado pelo cliente cria uma venda de verdade no ERP RevGás (estabelecimento 2580):
@@ -289,8 +351,10 @@ uv run --env-file .env python -m revgas_chatbot.canais.canal_web --venda-real
 uv run --env-file .env python -m revgas_chatbot.canais.canal_whatsapp --venda-real
 ```
 
+> [!CAUTION]
+> Com `--venda-real`, cada pedido confirmado vira uma venda de verdade no ERP. O programa mostra o aviso `VENDA REAL LIGADA` ao iniciar (e a página web também avisa).
+
 - Precisa de `REVGAS_API_KEY`, `REVGAS_API_URL` e `REVGAS_CLIENTE_DEMO` no `.env`; sem eles, o programa não inicia.
-- O programa mostra o aviso `VENDA REAL LIGADA` ao iniciar (e a página web também avisa).
 - Toda venda usa o cliente de demonstração de `REVGAS_CLIENTE_DEMO`, porque a chave atual ainda não tem acesso à busca de clientes da API.
 - As vendas são criadas **sem avisar os entregadores**.
 - A API limita a 1 requisição por segundo; o chatbot respeita esse limite.
@@ -303,6 +367,16 @@ uv run --env-file .env python -m revgas_chatbot.vendas.venda_de_teste --cancelar
 
 ## 👥 Equipe
 
-- Sávio Macêdo
-- Bruno Moraes
-- Matheus Farias
+<table>
+<tr>
+<td align="center"><b>Sávio Macêdo</b></td>
+<td align="center"><b>Bruno Moraes</b></td>
+<td align="center"><b>Matheus Farias</b></td>
+</tr>
+</table>
+
+---
+
+<div align="center">
+<sub>🔥 Projeto de Extensão VI · Transformação Digital · 2026.2</sub>
+</div>
