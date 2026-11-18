@@ -41,16 +41,21 @@ def api():
     return api
 
 
-def semear(api, *, dias_atras=1, quantidade=2, status=None, cliente=77, pagamento="PIX"):
+def semear(api, *, dias_atras=1, quantidade=2, status=None, cliente=77, pagamento="PIX", horas_atras=None,
+           observacao=None, entregue_em=None):
     venda = api.semear_venda(
         {"establishment_id": 2580, "customer_id": cliente, "channel": "WHATSAPP",
          "products": [{"product_id": 26717, "quantity": quantidade, "value": 110.0,
                        "product_description": "botijão de gás"}],
-         **({"payments": [{"payment_type": pagamento, "value": 110.0 * quantidade}]} if pagamento else {})},
-        criada_em=AGORA - timedelta(days=dias_atras),
+         **({"payments": [{"payment_type": pagamento, "value": 110.0 * quantidade}]} if pagamento else {}),
+         **({"observation": observacao} if observacao else {})},
+        criada_em=AGORA - (timedelta(hours=horas_atras) if horas_atras is not None else timedelta(days=dias_atras)),
     )
+    guardada = next(v for v in api.vendas if v["id"] == venda["id"])
     if status:
-        next(v for v in api.vendas if v["id"] == venda["id"])["status"] = status
+        guardada["status"] = status
+    if entregue_em:
+        guardada["delivered_at"] = entregue_em
     return venda["id"]
 
 
@@ -101,6 +106,7 @@ def abertas(fila):
 @pytest.mark.parametrize("frase", ["quero cancelar", "cancela meu pedido", "desisti do pedido", "não quero mais"])
 def test_frases_de_cancelamento_mostram_os_pedidos(conversa, api, frase):
     venda = semear(api)
+    semear(api, dias_atras=2)  # M2 (18/11): com um pedido só, a pergunta é "É esse?"; a lista é para 2 ou mais
     resposta = falar(conversa, frase)
 
     assert "Qual pedido?" in resposta
@@ -187,7 +193,7 @@ def test_no_meio_do_pedido_escolher_cancelar_um_pedido_feito(conversa, api):
     falar(conversa, "sim", "1", "quero cancelar")
 
     resposta = "\n".join(conversa.responder("3"))
-    assert "nada tinha sido enviado" in resposta and "Qual pedido?" in resposta
+    assert "nada tinha sido enviado" in resposta and "Encontrei seu pedido" in resposta  # M2: um pedido só
 
 
 def test_no_meio_do_pedido_problema_no_produto_pergunta_antes_de_descartar(conversa, api):
@@ -238,7 +244,7 @@ def test_depois_do_pedido_cancelar_mostra_o_pedido_novo_no_topo(conversa, api):
     [venda] = api.vendas_criadas()
     resposta = "\n".join(conversa.responder("quero cancelar"))
 
-    assert f"1) Pedido {venda['id']}" in resposta
+    assert f"Quer cancelar o pedido {venda['id']}, que você acabou de fazer?" in resposta  # M2
 
 
 def test_nome_cancelar_inteiro_entra_mas_frase_no_nome_nao(dependencias, api):
@@ -312,6 +318,7 @@ def test_nao_na_confirmacao_nao_registra_nada(conversa, api, fila):
 
 def test_escolha_invalida_repete_a_lista(conversa, api):
     semear(api)
+    semear(api, dias_atras=2)  # M2 (18/11): com um pedido só, a pergunta é "É esse?"; a lista é para 2 ou mais
     resposta = falar(conversa, "quero cancelar", "7")
 
     assert "Escolha um número da lista." in resposta and "Qual pedido?" in resposta
@@ -319,6 +326,7 @@ def test_escolha_invalida_repete_a_lista(conversa, api):
 
 def test_nao_achei_meu_pedido_segue_sem_pedido(conversa, api, fila):
     semear(api)
+    semear(api, dias_atras=2)  # M2 (18/11): com um pedido só, a pergunta é "É esse?"; a lista é para 2 ou mais
     falar(conversa, "quero cancelar", "0", "1", "não", "1")
 
     [s] = abertas(fila)
@@ -426,13 +434,13 @@ def test_nunca_pede_dado_bancario(conversa, api):
 
 
 def test_modo_real_lista_o_cliente_fixo(dependencias, api, fila):
-    venda = semear(api, cliente=5700355)
+    venda = semear(api, cliente=5700355, observacao="DEMONSTRAÇÃO DO CHATBOT. [chatbot:x]")  # M2: só do chatbot
     real = replace(dependencias, devolucao=Devolucao(api=dependencias.api, relogio=api.relogio, fila=fila,
                                                       cliente_fixo=5700355))
     conversa = Conversa("5586999990000", real, numero_confiavel=False)  # como no --venda-real
     resposta = falar(conversa, "quero cancelar")
 
-    assert f"1) Pedido {venda}" in resposta
+    assert f"Pedido {venda}" in resposta and "É esse?" in resposta
     assert "buscar_clientes" not in api.operacoes
 
 
@@ -496,7 +504,7 @@ def test_08_ia_abre_o_cancelamento_no_pos_venda(conversa, ia, api):
     ia.respostas["quero cancelaar"] = Interpretacao(intencao="CANCELAR_OU_DEVOLVER")
     resposta = "\n".join(conversa.responder("quero cancelaar"))
 
-    assert "Qual pedido?" in resposta
+    assert "Quer cancelar o pedido" in resposta  # M2: o pedido desta conversa
 
 
 def test_08_ia_com_outra_frase_mostra_o_menu(conversa, ia):
@@ -530,7 +538,7 @@ def test_08_sem_ia_a_palavra_exata_continua_valendo(dependencias):
     conversa = Conversa(TELEFONE, replace(dependencias, interpretador=None))
     falar(conversa, *ATE_O_PEDIDO)
 
-    assert "Qual pedido?" in "\n".join(conversa.responder("cancelar"))
+    assert "Quer cancelar o pedido" in "\n".join(conversa.responder("cancelar"))  # M2
 
 
 # --- Ticket 09 (Q2): pós-venda ensina "cancelar"; atendente leva o contexto ------------------
@@ -576,3 +584,118 @@ def test_09_sem_contexto_o_resumo_e_o_de_hoje(conversa, fila):
 
     [s] = abertas(fila)
     assert s.resumo == "Cliente pediu atendente."
+
+
+
+# --- Melhorias no cancelamento (pedido-cancelamento-melhorias-2026-11-18.md) ------------------
+
+
+def test_m1_pedido_de_1h_nao_entregue_e_alta_com_aviso(conversa, api, fila):
+    semear(api, horas_atras=1)
+    falar(conversa, "quero cancelar", "1", "1", "não")  # é esse, desisti, não pagou
+    final = "\n".join(conversa.responder("1"))
+
+    [s] = abertas(fila)
+    assert s.prioridade == "ALTA"
+    assert "O entregador pode já estar a caminho" in final
+    assert final.index("O entregador pode") < final.index("protocolo")
+    assert "feito às 14:00" in s.resumo
+
+
+def test_m1_pedido_de_3h_e_normal_sem_aviso(conversa, api, fila):
+    semear(api, horas_atras=3)
+    falar(conversa, "quero cancelar", "1", "1", "não")
+    final = "\n".join(conversa.responder("1"))
+
+    [s] = abertas(fila)
+    assert s.prioridade == "NORMAL" and "entregador" not in final
+
+
+def test_m2_depois_do_pedido_pergunta_direto_pelo_pedido_feito(conversa, api, fila):
+    falar(conversa, *ATE_O_PEDIDO)
+    [venda] = api.vendas_criadas()
+    resposta = "\n".join(conversa.responder("cancelar"))
+
+    assert f"Quer cancelar o pedido {venda['id']}, que você acabou de fazer?" in resposta
+    assert "1) sim" in resposta and "2) é outro pedido" in resposta
+    for r in ("1", "1", "não", "1"):  # sim, desisti, não pagou, confirma
+        conversa.responder(r)
+    [s] = abertas(fila)
+    assert s.dados["pedido_id"] == venda["id"]
+
+
+def test_m2_e_outro_pedido_busca_e_segue(conversa, api):
+    semear(api, dias_atras=2)
+    falar(conversa, *ATE_O_PEDIDO)
+    conversa.responder("cancelar")
+
+    assert "Qual pedido?" in "\n".join(conversa.responder("2"))  # 2 pedidos: a lista
+
+
+def test_m2_um_pedido_so_pergunta_e_esse(conversa, api, fila):
+    venda = semear(api)
+    resposta = falar(conversa, "quero cancelar")
+
+    assert "Encontrei seu pedido" in resposta and f"Pedido {venda}" in resposta
+    assert "É esse? 1) sim 2) não" in resposta and "Qual pedido?" not in resposta
+
+
+def test_m2_um_pedido_nao_e_esse_segue_sem_pedido(conversa, api, fila):
+    semear(api)
+    falar(conversa, "quero cancelar", "2", "1", "não", "1")
+
+    [s] = abertas(fila)
+    assert s.dados["pedido_id"] is None
+
+
+def test_m2_dois_pedidos_mostram_a_lista(conversa, api):
+    semear(api, dias_atras=1)
+    semear(api, dias_atras=2)
+
+    assert "Qual pedido?" in falar(conversa, "quero cancelar")
+
+
+def test_m2_modo_real_so_pedidos_do_chatbot(dependencias, api, fila):
+    do_chatbot = semear(api, cliente=5700355, observacao="DEMONSTRAÇÃO DO CHATBOT - NÃO ENTREGAR. [chatbot:abc]")
+    semear(api, cliente=5700355, observacao="venda feita no painel", dias_atras=2)
+    real = replace(dependencias, devolucao=Devolucao(api=dependencias.api, relogio=api.relogio, fila=fila,
+                                                      cliente_fixo=5700355))
+    resposta = falar(Conversa("5586999990000", real, numero_confiavel=False), "quero cancelar")
+
+    assert f"Pedido {do_chatbot}" in resposta and "É esse?" in resposta  # o do painel não aparece
+
+
+@pytest.mark.parametrize("como", [{"status": "CONFIRM"}, {"entregue_em": "2026-11-17T16:00:00-03:00"}])
+def test_m3_pedido_entregue_oferece_as_opcoes(conversa, api, fila, como):
+    semear(api, **como)
+    resposta = falar(conversa, "quero cancelar", "1")
+
+    assert "Esse pedido já foi entregue." in resposta
+    assert "1) problema com o produto" in resposta and "2) devolução do valor" in resposta
+    assert "3) falar com um atendente" in resposta
+    assert abertas(fila) == []
+
+
+def test_m3_entregue_problema_com_o_produto(conversa, api, fila):
+    venda = semear(api, status="CONFIRM")
+    falar(conversa, "quero cancelar", "1", "1")
+    conversa.responder("veio sem lacre")
+    conversa.responder("1")
+
+    [s] = abertas(fila)
+    assert s.tipo == "PROBLEMA_PRODUTO" and s.dados["pedido_id"] == venda
+
+
+def test_m3_entregue_devolucao_do_valor(conversa, api, fila):
+    semear(api, status="CONFIRM")
+    resposta = falar(conversa, "quero cancelar", "1", "2")
+
+    assert "Qual o motivo?" in resposta
+
+
+def test_m3_entregue_atendente(conversa, api, fila):
+    semear(api, status="CONFIRM")
+    resposta = falar(conversa, "quero cancelar", "1", "3")
+
+    [s] = abertas(fila)
+    assert s.tipo == "ATENDIMENTO" and "ATD-" in resposta

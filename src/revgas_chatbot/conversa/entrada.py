@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import unicodedata
 from decimal import Decimal
 
+from revgas_chatbot.conversa.estados import nome_do_estado
+
 
 def _tem_digito_nao_ascii(texto: str) -> bool:
     """Dígitos de outros alfabetos ("１", "٨") contam como dígito em Python, mas não para a API (I1)."""
@@ -307,3 +309,128 @@ def quantidade_do_texto(texto: str) -> int | None:
         return extenso[0]
     numeros = re.findall(r"\d+", mensagem)
     return int(numeros[0]) if len(numeros) == 1 else None
+
+
+# Pedido "agilizar" (18/11): o modelo "Quantidade, endereço, bairro, cidade, pagamento"
+# lido por vírgulas, sem IA. O que não der para ler com segurança fica vazio (é perguntado depois).
+
+
+@dataclass(frozen=True)
+class Modelo:
+    quantidade: int | None = None
+    logradouro: str | None = None
+    numero: str | None = None
+    bairro: str | None = None
+    cidade: str | None = None
+    estado: str | None = None  # nome por extenso, se o cliente disse
+    pagamento: str | None = None  # tipo da API, ou "CARTAO" (sem dizer qual)
+    troco: Decimal | None = None
+    complemento: str | None = None  # I2: "apto 301", "casa 2"... depois do número
+
+
+# I1 (revisão): a 2ª parte só é endereço se tiver número ou começar como nome de rua.
+_TIPOS_DE_RUA = ("rua", "r", "av", "avenida", "travessa", "tv", "trav", "alameda", "al", "quadra", "qd",
+                 "conjunto", "conj", "rodovia", "estrada", "praca", "beco", "vila", "residencial", "largo")
+# I2 (revisão): o que vem depois do número da casa é complemento.
+_COMPLEMENTOS = ("apto", "apt", "ap", "apartamento", "casa", "bloco", "bl", "fundos", "lote", "lt", "sala",
+                 "andar", "cond", "condominio", "torre", "box", "loja")
+
+
+def parece_modelo(texto: str) -> bool:
+    """3+ partes separadas por vírgula e a 2ª parece endereço ("quero 2, por favor" não é)."""
+    partes = [" ".join(p.split()) for p in texto.split(",")]
+    if len(partes) < 3:
+        return False
+    segunda = normalizar(partes[1])
+    palavras = segunda.split()
+    if palavras and palavras[0] in ("na", "no", "em"):
+        palavras = palavras[1:]
+    return bool(re.search(r"\d", segunda)) or bool(palavras and palavras[0].rstrip(".") in _TIPOS_DE_RUA)
+
+
+_PALAVRA_BAIRRO = ("bairro", "bairo", "barrio", "bairr")
+_TROCO = re.compile(r"troco\s*(?:para|pra|de|p/)?\s*(?:r\$)?\s*([\d.,]+)")
+
+
+def forma_de_pagamento(texto: str) -> str | None:
+    """"pix" → PIX; "crédito" → CARTAO_DE_CREDITO; "débito" → CARTAO_DE_DEBITO;
+    "dinheiro" → MONEY; "cartão" sem dizer qual → "CARTAO"; outro → None."""
+    mensagem = normalizar(texto)
+    if _contem(mensagem, ("pix",)):
+        return "PIX"
+    if _contem(mensagem, ("credito",)):
+        return "CARTAO_DE_CREDITO"
+    if _contem(mensagem, ("debito",)):
+        return "CARTAO_DE_DEBITO"
+    if _contem(mensagem, ("dinheiro", "especie")):
+        return "MONEY"
+    if _contem(mensagem, ("cartao",)):
+        return "CARTAO"
+    return None
+
+
+def _rua_e_numero(parte: str) -> tuple[str | None, str | None, str | None]:
+    """(rua, número, complemento). I2 (revisão): o número é o 1º número da casa depois do nome
+    da rua (no fim, ou seguido de "apto", "casa", "bloco"...); o que vem depois é complemento.
+    "Rua 7 de Setembro 100" → ("Rua 7 de Setembro", "100", None)."""
+    texto = " ".join(parte.split())
+    for preposicao in _PREPOSICOES_DA_RUA:
+        if normalizar(texto).startswith(preposicao.strip() + " "):
+            texto = texto[len(preposicao):].strip()
+            break
+    palavras = texto.split()
+    rua, numero, complemento = texto, None, None
+    for i in range(1, len(palavras)):
+        # "S/N" pode vir junto ("S/N") ou separado ("S N").
+        for tamanho in (2, 1):
+            candidato = " ".join(palavras[i:i + tamanho])
+            depois = palavras[i + tamanho:]
+            if len(palavras[i:i + tamanho]) < tamanho or numero_do_endereco(candidato) is None:
+                continue
+            if depois and normalizar(depois[0]) not in _COMPLEMENTOS:
+                continue  # "7" de "Rua 7 de Setembro": faz parte do nome
+            rua, numero = " ".join(palavras[:i]), numero_do_endereco(candidato)
+            complemento = " ".join(depois) or None
+            break
+        if numero:
+            break
+    mais_que_a_rua, trecho = rua_do_texto(rua)
+    if mais_que_a_rua:
+        rua = trecho
+    if not rua or len(rua) < 3 or numero_do_endereco(rua) or normalizar(rua.split()[0]) in _COMPLEMENTOS:
+        return None, None, None  # sem um nome de rua seguro, nada é usado (é perguntado depois)
+    return rua, numero, complemento
+
+
+def ler_modelo(texto: str) -> Modelo | None:
+    """Lê "2, Rua das Flores 123, Centro, Teresina, Pix" por posição. Sem vírgula → None."""
+    if "," not in texto or _tem_digito_nao_ascii(texto):
+        return None
+    partes = [" ".join(p.split()) for p in texto.split(",")]
+    while len(partes) < 5:
+        partes.append("")
+    campos: dict = {}
+    if partes[0]:
+        campos["quantidade"] = quantidade_do_texto(partes[0])
+    if partes[1]:
+        campos["logradouro"], campos["numero"], campos["complemento"] = _rua_e_numero(partes[1])
+    if partes[2]:
+        palavras = partes[2].split()
+        if palavras and normalizar(palavras[0]) in _PALAVRA_BAIRRO:
+            palavras = palavras[1:]
+        campos["bairro"] = " ".join(palavras) or None
+    if partes[3]:
+        campos["cidade"] = partes[3]
+    for parte in partes[4:]:  # pagamento, troco e (se o cliente disse) o estado, em qualquer ordem
+        if not parte:
+            continue
+        mensagem = normalizar(parte)
+        troco = _TROCO.search(mensagem)
+        if troco:
+            campos["troco"] = valor_em_reais(troco.group(1))
+        forma = forma_de_pagamento(parte)
+        if forma and "pagamento" not in campos:
+            campos["pagamento"] = forma
+        elif not troco and not forma and nome_do_estado(parte):
+            campos["estado"] = nome_do_estado(parte)
+    return Modelo(**campos)

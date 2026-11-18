@@ -36,6 +36,8 @@ class PedidoDoCliente:
     total: Decimal
     status: str  # status da API: só para o atendente (o significado para o cliente é pendente)
     pagamentos: tuple[str, ...] | None = None  # ticket 07: formas de pagamento; None = desconhecidas
+    criada_em: datetime | None = None  # M1 (18/11): para saber se o entregador pode ter saído
+    entregue: bool = False  # M3 (18/11): status CONFIRM ou `delivered_at`
 
     @property
     def cancelado(self) -> bool:
@@ -74,6 +76,7 @@ ResultadoDaBusca = PedidosEncontrados | NenhumPedido | TransferirAtendente
 class SolicitacaoAberta:
     protocolo: str
     mensagem_para_cliente: str
+    entregador_pode_ter_saido: bool = False  # M1: a conversa avisa o cliente antes do protocolo
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,14 @@ class Devolucao:
         self._cliente_fixo = cliente_fixo
         self._nomes = {pid: p.nome for pid, p in (catalogo or {}).items()}
 
+    def _entregador_pode_ter_saido(self, tipo: str, pedido: PedidoDoCliente | None) -> bool:
+        """M1 (18/11): cancelamento de pedido não entregue feito há até 2 horas (pelos dados do pedido)."""
+        if tipo != "CANCELAMENTO" or pedido is None or pedido.criada_em is None:
+            return False
+        if pedido.entregue or pedido.cancelado:
+            return False
+        return self._relogio.agora() - pedido.criada_em <= timedelta(hours=2)
+
     @property
     def usa_cliente_fixo(self) -> bool:
         """Modo real: os pedidos vêm do cliente de demonstração, não do telefone."""
@@ -217,6 +228,9 @@ class Devolucao:
         else:
             return TransferirAtendente("pedidos demais para listar com segurança")
 
+        if self._cliente_fixo is not None:
+            # M2 (18/11): no modo real, só as vendas feitas pelo chatbot (não as do painel).
+            vendas = [v for v in vendas if "[chatbot:" in str(v.get("observation") or "")]
         # Só as vendas DESTE cliente são validadas: venda de balcão (sem cliente)
         # ou de outra pessoa é simplesmente ignorada, mesmo se vier estranha.
         do_cliente = [v for v in vendas if _inteiro(v.get("customer_id")) and v["customer_id"] == customer_id]
@@ -300,6 +314,10 @@ class Devolucao:
             pedido.texto_para_atendente() if pedido else "O cliente não encontrou o pedido na lista.",
             f"Motivo: {regra.motivos[motivo]}",
         ]
+        recente = self._entregador_pode_ter_saido(tipo, pedido)
+        if recente:
+            hora = pedido.criada_em.astimezone(FUSO_TERESINA).strftime("%H:%M")
+            linhas.append(f"Pedido feito às {hora} e ainda não entregue: o entregador pode já ter saído.")
         if preferencia is not None:
             rotulo = "Preferência" if regra.preferencia == "obrigatoria" else "Preferência, se houver valor a devolver"
             linhas.append(f"{rotulo}: {PREFERENCIAS[preferencia]}")
@@ -318,8 +336,10 @@ class Devolucao:
                 "preferencia": preferencia,
             },
             texto_cliente=texto,
+            alta=recente,
         )
         return SolicitacaoAberta(
+            entregador_pode_ter_saido=recente,
             protocolo=protocolo,
             mensagem_para_cliente=(
                 f"Sua solicitação foi registrada com o protocolo {protocolo}. "
@@ -392,5 +412,7 @@ def _venda(venda: dict, nomes: Mapping[int, str] | None = None) -> tuple[datetim
         total=total,
         status=status,
         pagamentos=formas,
+        criada_em=criada_em,
+        entregue=status == "CONFIRM" or bool(venda.get("delivered_at")),
     )
     return criada_em, pedido

@@ -368,6 +368,8 @@ def test_item_de_venda_sem_cliente_e_ignorado_e_nao_vaza():
 def test_cliente_fixo_lista_as_vendas_dele_sem_buscar_cliente():
     api = nova_api()
     venda = semear(api, dias_atras=1, cliente=5700355)
+    for v in api.vendas:  # M2 (18/11): no modo real só entram as vendas com a marca do chatbot
+        v["observation"] = "DEMONSTRAÇÃO DO CHATBOT. [chatbot:x]"
     semear(api, cliente=77)  # de outra pessoa: não aparece
     fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
     d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, cliente_fixo=5700355)
@@ -454,3 +456,13 @@ def test_07_pedido_traz_as_formas_de_pagamento(pagamentos, formas):
     [pedido] = _com_catalogo(api).pedidos_do_cliente(TELEFONE).pedidos
 
     assert pedido.pagamentos == formas
+
+
+
+def test_m2_modo_real_ignora_vendas_do_painel():
+    api = nova_api()
+    semear(api, dias_atras=1, cliente=5700355)  # sem a marca: feita no painel
+    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
+    d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, cliente_fixo=5700355)
+
+    assert isinstance(d.pedidos_do_cliente(TELEFONE), NenhumPedido)

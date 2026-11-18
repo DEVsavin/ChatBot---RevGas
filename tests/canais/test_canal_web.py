@@ -292,7 +292,7 @@ def test_modo_real_nao_busca_cadastro_e_pede_o_nome(real, api):
 
 def test_modo_real_pedido_completo_usa_o_cliente_fixo(real, api):
     sessao = iniciar(real)["sessao"]
-    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "pular", "pular", "1"):
         enviar(real, sessao, texto)
     resposta = enviar(real, sessao, "1")
 
@@ -362,7 +362,8 @@ def test_06_cancelamento_no_chat_web_mostra_o_nome_do_produto(cliente):
     for texto in ("sim", "3", "sim", "1", "1"):
         enviar(cliente, sessao, texto)
 
-    assert "3x botijão de gás" in enviar(cliente, sessao, "quero cancelar")
+    enviar(cliente, sessao, "quero cancelar")  # M2: pergunta pelo pedido desta conversa
+    assert "3x botijão de gás" in enviar(cliente, sessao, "2")  # "é outro pedido" → o encontrado
 
 
 # --- Avisar os entregadores (pedido de 18/11): só com --venda-real e digitando AVISAR ------
@@ -374,7 +375,7 @@ def test_venda_real_com_aviso_manda_new_sale(tmp_path, api):
     cliente = TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
     inicio = iniciar(cliente)
     assert "AVISA os entregadores" in inicio["aviso"]
-    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "pular", "pular", "1"):
         enviar(cliente, inicio["sessao"], texto)
     enviar(cliente, inicio["sessao"], "1")
 
@@ -385,7 +386,7 @@ def test_venda_real_com_aviso_manda_new_sale(tmp_path, api):
 
 def test_venda_real_sem_a_opcao_continua_none(real, api):
     sessao = iniciar(real)["sessao"]
-    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "pular", "pular", "1", "1"):
         enviar(real, sessao, texto)
 
     assert api.vendas_criadas()[0]["broadcast"] == "NONE"

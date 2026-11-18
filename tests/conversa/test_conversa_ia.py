@@ -12,7 +12,7 @@ import pytest
 
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_revgas.api_falsa import ApiRevGasFalsa, RelogioFalso
-from revgas_chatbot.conversa.conversa import Conversa, Dependencias
+from revgas_chatbot.conversa.conversa import MODELO_DE_MENSAGEM, Conversa, Dependencias
 from revgas_chatbot.conversa.entrada import numero_ficticio
 from revgas_chatbot.atendimento.fila import FilaDeAtendimento
 from revgas_chatbot.fuso import FUSO_TERESINA
@@ -270,7 +270,7 @@ def test_sem_ia_o_endereco_inteiro_nao_vira_a_rua(conversa, ia):
     *_, rua = dialogo(conversa, *ATE_A_RUA, FRASE)
 
     assert texto(rua) == "Anotei a rua: Rua Nova.\nQual é o número? (ou S/N)"
-    *_, resumo = [conversa.responder(m) for m in ("10", "Centro", "Teresina", "PI", "pular", "pular", "1")]
+    *_, resumo = [conversa.responder(m) for m in ("10", "Centro", "Teresina", "pular", "pular", "1")]
     assert "Entrega: Rua Nova, 10 — Centro, Teresina, Piauí" in texto(resumo)
 
 
@@ -282,14 +282,18 @@ def test_frase_sem_a_rua_preenche_o_que_veio_e_pergunta_a_rua(conversa, ia):
 
     assert "Qual é a rua?" in texto(resposta)
     *_, depois_da_rua, depois_do_numero = [conversa.responder("Rua Nova"), conversa.responder("10")]
-    assert "Qual é o estado?" in texto(depois_do_numero)  # bairro e cidade não são perguntados
+    assert texto(depois_do_numero) == "Complemento? (ou 'pular')"  # bairro, cidade e estado (A1) não são perguntados
 
 
-def test_estado_invalido_na_frase_e_perguntado_depois(conversa, ia):
+def test_estado_invalido_na_frase_vira_o_padrao(conversa, ia):
+    # Pedido "agilizar" (A1): estado inválido é descartado e o estado vem sozinho (Piauí).
     ia.respostas[FRASE] = Interpretacao(intencao="PEDIR", endereco={**ENDERECO_DITO, "estado": "XX"})
     *_, resposta = dialogo(conversa, *ATE_A_RUA, FRASE)
 
-    assert "Qual é o estado?" in texto(resposta)
+    assert "Qual é o estado?" not in texto(resposta)
+    assert texto(resposta) == "Complemento? (ou 'pular')"
+    *_, resumo = [conversa.responder(m) for m in ("pular", "pular", "1")]
+    assert "Teresina, Piauí" in texto(resumo)
 
 
 def test_uma_so_chamada_a_ia_por_mensagem_no_campo_da_rua(conversa, ia):
@@ -408,11 +412,10 @@ def test_2_endereco_parcial_do_texto_livre_e_aproveitado_e_so_falta_o_estado(dep
     conversa = Conversa(NOVO, dependencias)
     *_, resposta = dialogo(conversa, "sim", "Fulano", FRASE_PARCIAL)
 
-    assert resposta[-1] == "Qual é o estado? (ex.: PI ou Piauí)"
+    # Pedido "agilizar" (A1): o estado vem sozinho (Piauí): vai direto ao resumo.
     assert "Qual é a rua?" not in texto(resposta)
-    resumo = conversa.responder("PI")
-    assert "Confira seu pedido:" in texto(resumo)  # complemento e referência não são perguntados
-    assert "rua das flores, 123 — centro, teresina, Piauí" in texto(resumo)
+    assert "Confira seu pedido:" in texto(resposta)  # complemento e referência não são perguntados
+    assert "rua das flores, 123 — centro, teresina, Piauí" in texto(resposta)
 
 
 def test_2_endereco_parcial_vence_o_endereco_do_cadastro(conversa, ia):
@@ -420,7 +423,7 @@ def test_2_endereco_parcial_vence_o_endereco_do_cadastro(conversa, ia):
     *_, resposta = dialogo(conversa, "sim", FRASE_PARCIAL)
 
     assert "Entregar em Rua Exemplo" not in texto(resposta)
-    assert resposta[-1] == "Qual é o estado? (ex.: PI ou Piauí)"
+    assert "rua das flores, 123 — centro, teresina, Piauí" in texto(resposta)
 
 
 @pytest.mark.parametrize("reclamacao", ["eu ja informei tudo ali em cima", "já informei", "como eu disse antes",
@@ -434,8 +437,7 @@ def test_1_ja_informei_usa_o_endereco_dito_antes(dependencias, ia, reclamacao):
     assert pergunta_da_rua[-1] == "Qual é a rua?"
 
     resposta = conversa.responder(reclamacao)
-    assert resposta[-1] == "Qual é o estado? (ex.: PI ou Piauí)"
-    conversa.responder("PI")
+    assert resposta[-1].startswith("Como vai pagar?")  # o estado vem sozinho (A1)
     assert "rua das flores, 123 — centro, teresina, Piauí" in texto(conversa.responder("1"))  # PIX → resumo
 
 
@@ -457,7 +459,7 @@ def test_1_ja_informei_sem_endereco_anterior_explica_e_pergunta_de_novo(dependen
 def test_1_ja_informei_nao_vira_rua_no_pedido(dependencias, api):
     conversa = Conversa(NOVO, replace(dependencias, interpretador=None))
     dialogo(conversa, "sim", "Fulano", "1", "1", "eu ja informei tudo ali em cima",
-            "Rua Nova", "10", "Centro", "Teresina", "PI", "pular", "pular", "1", "1")
+            "Rua Nova", "10", "Centro", "Teresina", "pular", "pular", "1", "1")
 
     [venda] = api.vendas_criadas()
     assert venda["location"] == "Rua Nova"
@@ -474,7 +476,7 @@ def test_3_celular_sem_o_9_e_mostrado_e_salvo_com_o_9(dependencias, api, canal, 
     [saudacao] = dialogo(conversa)
     assert f"Este número é seu: {mostrado}?" in texto(saudacao)
 
-    dialogo(conversa, "sim", "Fulano", "1", "1", "Rua Nova", "10", "Centro", "Teresina", "PI", "pular", "pular",
+    dialogo(conversa, "sim", "Fulano", "1", "1", "Rua Nova", "10", "Centro", "Teresina", "pular", "pular",
             "1", "1")
     assert len(api.vendas_criadas()) == 1
     assert api.clientes[-1]["phones"] == [salvo]  # cliente novo cadastrado com o número certo
@@ -536,7 +538,7 @@ def test_04_um_produto_vai_direto_para_a_quantidade(um_produto, api):
     conversa = Conversa(TELEFONE, um_produto)
     *_, resposta = dialogo(conversa, "sim")
 
-    assert resposta == ["Olá, Maria!", "Botijão de gás (R$ 110,00). Quantos?"]
+    assert resposta == ["Olá, Maria!", MODELO_DE_MENSAGEM, "Botijão de gás (R$ 110,00). Quantos?"]
     conversa.responder("2")
     conversa.responder("sim")
     conversa.responder("1")
@@ -548,14 +550,14 @@ def test_04_cliente_novo_com_um_produto(um_produto):
     conversa = Conversa(NOVO, um_produto)
     *_, resposta = dialogo(conversa, "sim", "Fulano")
 
-    assert resposta == ["Olá, Fulano!", "Botijão de gás (R$ 110,00). Quantos?"]
+    assert resposta == ["Olá, Fulano!", MODELO_DE_MENSAGEM, "Botijão de gás (R$ 110,00). Quantos?"]
 
 
 def test_04_dois_produtos_continuam_com_a_lista(dependencias):
     conversa = Conversa(TELEFONE, dependencias)  # o catálogo de teste tem 2 produtos
     *_, resposta = dialogo(conversa, "sim")
 
-    assert resposta[1].startswith("O que você quer pedir?\n1) botijão de gás")
+    assert resposta[2].startswith("O que você quer pedir?\n1) botijão de gás")  # depois do modelo
 
 
 def test_04_ia_preenche_a_quantidade_na_mesma_frase(um_produto, ia):

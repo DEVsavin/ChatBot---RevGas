@@ -92,6 +92,7 @@ class FilaDeAtendimento:
         nome: str | None = None,
         dados: dict[str, Any] | None = None,
         texto_cliente: str | None = None,
+        alta: bool = False,  # M1 (18/11): a Devolucao sobe para ALTA pelos dados do pedido
     ) -> str:
         """Abre uma solicitação e devolve o protocolo.
 
@@ -109,6 +110,8 @@ class FilaDeAtendimento:
         if dados is not None and not isinstance(dados, dict):
             raise ValueError("dados deve ser um dicionário")
         prefixo, prioridade = TIPOS[tipo]
+        if alta and prioridade == NORMAL:  # só sobe de NORMAL para ALTA; nunca baixa um URGENTE
+            prioridade = ALTA
         agora = self._relogio.agora()  # um instante só: protocolo e criado_em batem
         data = agora.astimezone(FUSO_TERESINA).strftime("%Y%m%d")
         inicio = f"{prefixo}-{data}-"

@@ -155,7 +155,7 @@ def test_busca_do_cliente_e_registro_respeitam_1_segundo(conversa, api):
 # --- C1c: cliente novo, endereço campo a campo, troco, número digitado --------------
 
 NOVO = "5500900000002"  # não cadastrado
-ENDERECO_DIGITADO = ("Rua Nova", "S/N", "Bairro Novo", "Teresina", "pi", "Casa 2", "pular")
+ENDERECO_DIGITADO = ("Rua Nova", "S/N", "Bairro Novo", "Teresina", "Casa 2", "pular")
 
 
 @pytest.fixture
@@ -170,7 +170,7 @@ def test_cliente_novo_informa_nome_e_endereco_campo_a_campo(conversa_nova, api):
     assert "Qual é o seu nome?" in perguntas[1]
     assert "Olá, Joana!" in perguntas[2]
     for pergunta in ("Qual é a rua?", "Qual é o número?", "Qual é o bairro?", "Qual é a cidade?",
-                     "Qual é o estado?", "Complemento?", "Ponto de referência?"):
+                     "Complemento?", "Ponto de referência?"):  # o estado não é perguntado (agilizar, A1)
         assert any(pergunta in p for p in perguntas), pergunta
     resumo = perguntas[-2]
     assert "Nome: Joana Teste" in resumo
@@ -190,7 +190,7 @@ def test_cliente_novo_informa_nome_e_endereco_campo_a_campo(conversa_nova, api):
     [
         (0, "  ", "Preciso do seu nome para o pedido."),
         (3, " ", "Preciso da rua para a entrega."),
-        (7, "XX", "Não reconheci o estado. Envie a sigla (PI) ou o nome (Piauí)."),
+        (6, " ", "Preciso da cidade para a entrega."),  # o estado não é mais perguntado (agilizar, A1)
     ],
 )
 def test_campo_livre_invalido_explica_e_repete(conversa_nova, passo, invalida, explicacao):
@@ -545,7 +545,7 @@ def test_cancelar_depois_da_venda_leva_o_numero_da_venda(conversa, api, fila):
 def test_palavras_de_comando_dentro_de_respostas_nao_sequestram(conversa_nova, api, fila):
     respostas = dialogo(
         conversa_nova, "sim", "Maria Pessoa", "1", "1",
-        "Rua do Atendente, 10", "S/N", "Centro", "Teresina", "PI", "pular", "pular",
+        "Rua do Atendente, 10", "S/N", "Centro", "Teresina", "pular", "pular",
         "vou pagar pessoalmente",
     )
 
@@ -671,7 +671,7 @@ def test_apartamento_no_numero_e_recusado_com_a_explicacao(conversa_nova, numero
 
 @pytest.mark.parametrize("numero, gravado", [("10", "10"), ("10A", "10A"), ("S/N", "S/N")])
 def test_numero_valido_e_aceito(conversa_nova, api, numero, gravado):
-    dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", numero, "Centro", "Teresina", "PI",
+    dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", numero, "Centro", "Teresina",
             "pular", "pular", "1", "1")
 
     [venda] = api.vendas_criadas()
@@ -680,7 +680,7 @@ def test_numero_valido_e_aceito(conversa_nova, api, numero, gravado):
 
 def test_resumo_mostra_complemento_e_referencia(conversa_nova):
     *_, resumo = dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", "10", "Centro", "Teresina",
-                         "PI", "Condomínio Edifício Goya, ap 409", "perto da praça", "1")
+                         "Condomínio Edifício Goya, ap 409", "perto da praça", "1")
 
     assert "Complemento: Condomínio Edifício Goya, ap 409" in texto(resumo)
     assert "Referência: perto da praça" in texto(resumo)
@@ -688,7 +688,7 @@ def test_resumo_mostra_complemento_e_referencia(conversa_nova):
 
 def test_resumo_sem_complemento_nem_referencia_nao_mostra_as_linhas(conversa_nova):
     *_, resumo = dialogo(conversa_nova, "sim", "Joana", "1", "1", "Rua Nova", "10", "Centro", "Teresina",
-                         "PI", "pular", "pular", "1")
+                         "pular", "pular", "1")
 
     assert "Complemento:" not in texto(resumo) and "Referência:" not in texto(resumo)
 
@@ -703,7 +703,7 @@ def test_01_endereco_inteiro_na_rua_aproveita_so_o_trecho_seguro(conversa_nova):
     *_, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", ENDERECO_INTEIRO)
 
     assert resposta == ["Anotei a rua: rua teste.", "Qual é o número? (ou S/N)"]
-    *_, resumo = [conversa_nova.responder(m) for m in ("10", "Centro", "Teresina", "PI", "pular", "pular", "1")]
+    *_, resumo = [conversa_nova.responder(m) for m in ("10", "Centro", "Teresina", "pular", "pular", "1")]
     rua = texto(resumo).split("Entrega: ")[1].split(",")[0]
     assert rua == "rua teste"
     for proibido in ("bairro", "8311", "pagar"):
@@ -738,7 +738,7 @@ def test_02_variacoes_de_sem_numero(conversa_nova, resposta):
     *_, seguinte = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua Nova", resposta)
 
     assert seguinte == ["Qual é o bairro?"]
-    *_, resumo = [conversa_nova.responder(m) for m in ("Centro", "Teresina", "PI", "pular", "pular", "1")]
+    *_, resumo = [conversa_nova.responder(m) for m in ("Centro", "Teresina", "pular", "pular", "1")]
     assert "Entrega: Rua Nova, S/N" in texto(resumo)
 
 
