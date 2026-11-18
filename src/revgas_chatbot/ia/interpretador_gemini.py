@@ -76,9 +76,13 @@ class InterpretadorGemini:
     ) -> None:
         self._chave = chave
         self._url = URL.format(modelo=modelo)
+        self.ultima_falha: str | None = None  # medidor da IA (I2)
         self._cliente = httpx.Client(transport=transporte, timeout=ESPERA_MAXIMA)
 
     def interpretar(self, texto: str, contexto: Contexto) -> Interpretacao | None:
+        # Medidor da IA (I2): o motivo da última falha ("cota", "http", "rede", "formato"),
+        # nunca a chave nem o texto; None quando a última chamada deu certo.
+        self.ultima_falha: str | None = None
         try:
             resposta = self._cliente.post(
                 self._url,
@@ -87,12 +91,17 @@ class InterpretadorGemini:
             )
         except httpx.HTTPError:
             _log.warning("IA sem resposta (rede ou demora); seguindo pelo roteiro")
+            self.ultima_falha = "rede"
             return None
         if resposta.status_code != 200:
             # Só o código: a mensagem de erro do Google pode repetir a chave.
             _log.warning("IA respondeu HTTP %s; seguindo pelo roteiro", resposta.status_code)
+            self.ultima_falha = "cota" if resposta.status_code == 429 else "http"
             return None
-        return _interpretacao(resposta)
+        interpretacao = _interpretacao(resposta)
+        if interpretacao is None:
+            self.ultima_falha = "formato"
+        return interpretacao
 
     def _corpo(self, texto: str, contexto: Contexto) -> dict[str, Any]:
         mensagem = (

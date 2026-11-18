@@ -114,3 +114,29 @@ def test_schema_pede_tambem_a_intencao_pergunta():
     assert ia.interpretar("não sei", CONTEXTO).intencao == "PERGUNTA"
     corpo = json.loads(recebidas[0].content)
     assert "PERGUNTA" in corpo["generationConfig"]["responseJsonSchema"]["properties"]["intencao"]["enum"]
+
+
+# --- medidor da IA (I2): o motivo da última falha, sem a chave nem o texto -----------------
+
+
+@pytest.mark.parametrize("responder, motivo", [
+    (lambda r: httpx.Response(429, json={"error": {}}), "cota"),
+    (lambda r: httpx.Response(500, text="erro"), "http"),
+    (_levanta(httpx.ReadTimeout("demorou")), "rede"),
+    (lambda r: httpx.Response(200, json=resposta_do_google("isto não é json")), "formato"),
+])
+def test_ultima_falha_diz_o_motivo(responder, motivo):
+    ia, _ = com_google(responder)
+
+    assert ia.interpretar("quero gás", CONTEXTO) is None
+    assert ia.ultima_falha == motivo
+
+
+def test_resposta_boa_limpa_a_ultima_falha():
+    respostas = iter([httpx.Response(429, json={"error": {}}),
+                      httpx.Response(200, json=resposta_do_google({"intencao": "OUTRA"}))])
+    ia, _ = com_google(lambda r: next(respostas))
+    ia.interpretar("quero gás", CONTEXTO)
+    ia.interpretar("quero gás", CONTEXTO)
+
+    assert ia.ultima_falha is None
