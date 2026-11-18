@@ -18,7 +18,10 @@ from typing import Any
 
 from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio, Resposta, TempoEsgotado
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
+import logging
+
 from revgas_chatbot.atendimento.atendimento import TransferirAtendente
+from revgas_chatbot.atendimento.fila import mascarar
 from revgas_chatbot.conversa.estados import nome_do_estado
 from revgas_chatbot.vendas.pedido import ForaDoCatalogo, Invalido, Pedido, Problema, ProdutoCatalogo, validar
 from revgas_chatbot.vendas.venda import CANAL, marca, montar_corpo_venda
@@ -46,6 +49,8 @@ class EmAndamento:
 
 
 Resultado = VendaCriada | PedidoInvalido | TransferirAtendente | EmAndamento
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -114,6 +119,14 @@ def _problemas_do_cliente(dados: Any) -> tuple[Problema, ...]:
     if len(campos) != len(erros) or any(c not in _CAMPOS_DO_CLIENTE for c in campos):
         return ()
     return tuple(Problema(*_CAMPOS_DO_CLIENTE[c]) for c in dict.fromkeys(campos))
+
+
+def _mensagem_da_api(dados: Any) -> str | None:
+    """O campo `message` da resposta, mascarado (11+ dígitos) e com até 200 caracteres."""
+    mensagem = dados.get("message") if isinstance(dados, dict) else None
+    if not isinstance(mensagem, str) or not mensagem.strip():
+        return None
+    return mascarar(" ".join(mensagem.split()))[:200]
 
 
 def dados_do_cliente(pedido: Pedido) -> dict[str, Any]:
@@ -300,6 +313,10 @@ class RegistradorDeVendas:
             problemas = _problemas_do_cliente(resposta.dados)
             if problemas:
                 raise _Parar(PedidoInvalido(problemas))
-        raise _Parar(
-            TransferirAtendente(f"erro HTTP {resposta.status} ao {etapa}", pedido.pedido_id)
-        )
+        motivo = f"erro HTTP {resposta.status} ao {etapa}"
+        mensagem = _mensagem_da_api(resposta.dados)
+        if mensagem:
+            # Bug de 18/11: sem a mensagem da API não dá para saber por que recusou.
+            motivo = f"{motivo}: {mensagem}"
+            _log.warning("API recusou ao %s: HTTP %s: %s", etapa, resposta.status, mensagem)
+        raise _Parar(TransferirAtendente(motivo, pedido.pedido_id))

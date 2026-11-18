@@ -565,3 +565,36 @@ def test_sem_modo_real_nada_muda():
     for campo in ("broadcast", "lat", "lon"):
         assert campo not in venda
     assert not venda["observation"].startswith("DEMONSTRAÇÃO")
+
+
+# --- Bug de 18/11: a mensagem da API no 400 não pode se perder -----------------------------
+
+
+def test_400_guarda_a_mensagem_da_api_mascarada_no_motivo_e_no_log(caplog):
+    api = api_com_cliente()
+    mensagem = "Venda com broadcast NEW_SALE exige entregador; telefone 5586999990000 sem cadastro"
+    api.roteirizar("criar_venda", Resposta(400, {"message": mensagem}))
+    with caplog.at_level("WARNING"):
+        resultado = montar(api).registrar(pedido())
+
+    assert isinstance(resultado, TransferirAtendente)
+    assert resultado.motivo.startswith("erro HTTP 400 ao criar a venda: Venda com broadcast NEW_SALE exige entregador")
+    assert "5586999990000" not in resultado.motivo
+    assert "exige entregador" in caplog.text and "5586999990000" not in caplog.text
+
+
+def test_mensagem_da_api_longa_vai_cortada_em_200(caplog):
+    api = api_com_cliente()
+    api.roteirizar("criar_venda", Resposta(400, {"message": "x" * 500}))
+    resultado = montar(api).registrar(pedido())
+
+    assert len(resultado.motivo.split(": ", 1)[1]) == 200
+
+
+@pytest.mark.parametrize("dados", [None, {}, {"message": 123}, "texto solto"])
+def test_sem_mensagem_o_motivo_e_o_de_antes(dados):
+    api = api_com_cliente()
+    api.roteirizar("criar_venda", Resposta(400, dados))
+    resultado = montar(api).registrar(pedido())
+
+    assert resultado.motivo == "erro HTTP 400 ao criar a venda"
