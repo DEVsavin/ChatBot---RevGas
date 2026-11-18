@@ -17,7 +17,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from revgas_chatbot.conversa.entrada import comando
+from revgas_chatbot.conversa.entrada import comando, pedido_de_devolucao
 
 MAX_MENSAGEM = 500  # mesmo limite da web
 IDS_LEMBRADOS = 5000  # W7: ids de mensagens já recebidas (em memória)
@@ -131,8 +131,8 @@ class AtendimentoWhatsApp:
             conversa = self._criar_conversa(m.telefone)
             respostas = conversa.iniciar()
             self._conversas[m.telefone] = conversa
-            # I1: vazamento ou pedido de atendente logo na primeira mensagem → atende já.
-            if comando(m.texto, livre=False) in ("VAZAMENTO", "ATENDENTE"):
+            # I1: vazamento, atendente ou devolução logo na primeira mensagem → atende já.
+            if comando(m.texto, livre=False) in ("VAZAMENTO", "ATENDENTE") or pedido_de_devolucao(m.texto):
                 respostas = conversa.responder(m.texto)
         else:
             respostas = conversa.responder(m.texto)

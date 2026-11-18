@@ -22,6 +22,7 @@ from revgas_chatbot.config import carregar_catalogo, carregar_pagamentos
 from revgas_chatbot.conversa.conversa import Conversa, Dependencias
 from revgas_chatbot.conversa.entrada import numero_ficticio, telefone
 from revgas_chatbot.atendimento.fila import FilaDeAtendimento
+from revgas_chatbot.devolucao.devolucao import Devolucao
 from revgas_chatbot.ia.interpretacao import Interpretador
 from revgas_chatbot.ia.interpretador_gemini import InterpretadorGemini
 from revgas_chatbot.vendas.registro import RegistradorDeVendas, VendaReal
@@ -177,6 +178,7 @@ def montar(
     cadenciada = ApiCadenciada(api, relogio)  # a única do programa
     catalogo = carregar_catalogo(pasta_config / "catalogo.json")
     pagamentos = carregar_pagamentos(pasta_config / "pagamentos.json")
+    fila = FilaDeAtendimento(Path(pasta_dados), relogio)
     dependencias = Dependencias(
         api=cadenciada,
         registrador=RegistradorDeVendas(
@@ -187,7 +189,7 @@ def montar(
             establishment_id=ESTABELECIMENTO,
             venda_real=VendaReal(cliente_fixo=venda_real.cliente_demo) if venda_real else None,
         ),
-        fila=FilaDeAtendimento(Path(pasta_dados), relogio),
+        fila=fila,
         catalogo=catalogo,
         pagamentos=pagamentos,
         seguranca=seguranca,
@@ -195,6 +197,13 @@ def montar(
         # Toda IA deste programa é a da cota grátis: só para os telefones da regra
         # (padrão: fictícios; C2-1, H3, W2).
         ia_permitida=ia_permitida,
+        # Mesma ApiCadenciada e mesma fila da venda (Q2). Só lê o ERP.
+        devolucao=Devolucao(
+            api=cadenciada,
+            relogio=relogio,
+            fila=fila,
+            cliente_fixo=venda_real.cliente_demo if venda_real else None,
+        ),
     )
     return Programa(
         dependencias=dependencias,

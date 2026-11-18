@@ -251,3 +251,13 @@ def test_modo_real_pelo_whatsapp_nao_busca_cadastro_e_usa_o_cliente_fixo(tmp_pat
     assert respostas[-1].startswith("Pedido registrado!")
     assert api.operacoes == ["criar_venda"]
     assert api.vendas_criadas()[0]["customer_id"] == 5700355
+
+
+# --- devolução na conversa (fase C): primeira mensagem entra direto ----------------------
+
+
+def test_primeira_mensagem_pedindo_cancelamento_vai_direto_para_a_devolucao(wa):
+    respostas = wa.conversa("quero cancelar meu pedido")
+
+    assert not any(r.startswith("Olá! Sou") for r in respostas)
+    assert "Não encontrei pedidos recentes" in "\n".join(respostas)  # Maria não tem pedidos na API de teste

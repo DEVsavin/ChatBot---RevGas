@@ -255,3 +255,19 @@ def test_atendimento_usa_atd_e_e_normal(fila):
     # C1-D1: transferências da conversa (cancelar, devolver, atendente, cliente não identificado).
     assert fila.abrir("ATENDIMENTO", TELEFONE, "Cliente pediu atendente.") == "ATD-20261111-1"
     assert fila.listar_abertas()[0].prioridade == "NORMAL"
+
+
+# --- devolução na conversa (DC-1): problema no produto com prioridade ALTA ----------------
+
+
+def test_problema_no_produto_e_alta_e_fica_entre_urgente_e_normal(fila, relogio, tmp_path):
+    fila.abrir("CANCELAMENTO", TELEFONE, "normal, a mais antiga")
+    relogio.avancar(60)
+    fila.abrir("PROBLEMA_PRODUTO", TELEFONE, "lacre violado")
+    relogio.avancar(60)
+    fila.abrir("VAZAMENTO", TELEFONE, "cheiro de gás")
+
+    abertas = fila.listar_abertas()
+    assert [s.tipo for s in abertas] == ["VAZAMENTO", "PROBLEMA_PRODUTO", "CANCELAMENTO"]
+    assert [s.prioridade for s in abertas] == ["URGENTE", "ALTA", "NORMAL"]
+    assert "ALTA" in (tmp_path / "fila.html").read_text(encoding="utf-8")

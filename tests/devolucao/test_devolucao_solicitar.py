@@ -86,7 +86,6 @@ def test_cancelamento_abre_solicitacao_com_protocolo(devolucao, fila):
     "tipo, motivo, preferencia",
     [
         ("CANCELAMENTO", "DESISTI", None),
-        ("CANCELAMENTO", "DEMOROU", None),
         ("CANCELAMENTO", "PEDI_ERRADO", None),
         ("ESTORNO", "PEDIDO_CANCELADO_JA_PAGO", "DINHEIRO_DE_VOLTA"),
         ("ESTORNO", "PRODUTO_COM_PROBLEMA", "CREDITO_PROXIMA_COMPRA"),
@@ -161,7 +160,7 @@ def test_estorno_sem_preferencia_e_invalido(devolucao, fila):
 
 def test_cancelamento_aceita_preferencia_e_ela_vai_no_resumo(devolucao, fila):
     devolucao.solicitar(
-        "CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="DEMOROU", preferencia="CREDITO_PROXIMA_COMPRA"
+        "CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="PEDI_ERRADO", preferencia="CREDITO_PROXIMA_COMPRA"
     )
 
     assert "Preferência, se houver valor a devolver: crédito na próxima compra" in fila.listar_abertas()[0].resumo
@@ -304,13 +303,22 @@ def test_argumento_de_tipo_errado_e_erro_de_programacao(devolucao, argumentos):
 
 
 def test_texto_tambem_e_aceito_com_motivo_da_lista(devolucao, fila):
-    devolucao.solicitar("CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="DEMOROU", texto="esperei 2 horas")
+    devolucao.solicitar("CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="DESISTI", texto="achei mais barato")
 
-    assert fila.listar_abertas()[0].texto_cliente == "esperei 2 horas"
+    assert fila.listar_abertas()[0].texto_cliente == "achei mais barato"
 
 
 def test_texto_longo_demais_com_motivo_da_lista_e_invalido(devolucao, fila):
-    resultado = devolucao.solicitar("CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="DEMOROU", texto="a" * 201)
+    resultado = devolucao.solicitar("CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="DESISTI", texto="a" * 201)
 
     assert isinstance(resultado, SolicitacaoInvalida)
     assert resultado.campos() == ["texto"]
+
+
+def test_demorou_nao_e_mais_motivo_de_cancelamento(devolucao, fila):
+    # DC-4 (usuário, 18/11): "demorou" saiu da lista de motivos do cancelamento.
+    resultado = devolucao.solicitar("CANCELAMENTO", TELEFONE, **DO_PEDIDO, motivo="DEMOROU")
+
+    assert isinstance(resultado, SolicitacaoInvalida)
+    assert resultado.campos() == ["motivo"]
+    assert fila.listar_abertas() == []

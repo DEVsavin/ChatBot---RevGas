@@ -31,15 +31,17 @@ from revgas_chatbot.atendimento.pagina_fila import pagina_da_fila
 
 
 URGENTE = "URGENTE"
+ALTA = "ALTA"  # problema no produto (DC-1): depois dos urgentes, antes dos normais
 NORMAL = "NORMAL"
+_ORDEM = {URGENTE: 0, ALTA: 1, NORMAL: 2}
 
 # Tipo -> (prefixo do protocolo, prioridade).
 # Devolução usa DEV; transferência de venda e comprovante, ATD (D1).
-# Só vazamento é urgente: a prioridade vem do tipo, nunca de quem abre.
+# Só vazamento é urgente; problema no produto é alta (DC-1). A prioridade vem do tipo, nunca de quem abre.
 TIPOS = {
     "CANCELAMENTO": ("DEV", NORMAL),
     "ESTORNO": ("DEV", NORMAL),
-    "PROBLEMA_PRODUTO": ("DEV", NORMAL),
+    "PROBLEMA_PRODUTO": ("DEV", ALTA),
     "ALTERACAO": ("DEV", NORMAL),
     "VASILHAME": ("DEV", NORMAL),
     "VAZAMENTO": ("DEV", URGENTE),
@@ -131,7 +133,7 @@ class FilaDeAtendimento:
         """Abertas: urgentes primeiro, depois as mais antigas."""
         return sorted(
             self._abertas().values(),
-            key=lambda s: (s.prioridade != URGENTE, s.criada_em),
+            key=lambda s: (_ORDEM.get(s.prioridade, len(_ORDEM)), s.criada_em),
         )
 
     def concluir(self, protocolo: str, observacao: str | None = None) -> None:

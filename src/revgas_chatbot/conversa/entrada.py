@@ -7,6 +7,7 @@ não dá para entender (a conversa explica e repete a pergunta).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 import unicodedata
 from decimal import Decimal
 
@@ -189,3 +190,48 @@ def ja_informado(texto: str) -> bool:
     """A pessoa diz que já mandou o dado ("já informei", "tá lá em cima")."""
     mensagem = normalizar(texto)
     return _contem(mensagem, _JA_INFORMADO)
+
+
+# Devolução na conversa (fase C): qual dos 3 cenários a frase pede.
+# Ordem: problema no produto, cobrança/estorno, cancelamento, genérico.
+# DC-4 (usuário, 18/11): "demorou"/"tá demorando" NÃO abrem cancelamento.
+_PROBLEMA_NO_PRODUTO = (
+    "lacre violado", "lacre rompido", "sem lacre", "lacre", "peso errado", "veio errado", "produto errado",
+    "botijao errado", "veio vazio", "amassado", "com defeito", "defeito", "problema com o produto",
+    "problema no produto", "problema com o botijao", "problema no botijao",
+)
+_GENERICOS_DO_PRODUTO = ("problema com o produto", "problema no produto", "problema com o botijao",
+                         "problema no botijao")
+_COBRANCA_ERRADA = ("paguei duas vezes", "paguei 2 vezes", "cobraram a mais", "cobrado a mais",
+                    "cobraram duas vezes", "cobranca errada", "cobraram errado", "valor errado")
+# I2 (revisão): "meu dinheiro" e "devolve" saíram (frases comuns no meio de um pedido).
+_ESTORNO = ("estorno", "estornar", "reembolso", "dinheiro de volta", "devolver o dinheiro", "devolucao do dinheiro")
+_CANCELAMENTO = {
+    "desisti": "DESISTI", "desistir": "DESISTI", "nao quero mais": "DESISTI",
+    "pedi errado": "PEDI_ERRADO",
+    "cancelar": None, "cancela": None, "cancelamento": None, "cancele": None,
+}
+_DEVOLUCAO_GENERICA = ("devolver", "devolucao")
+
+
+@dataclass(frozen=True)
+class PedidoDeDevolucao:
+    tipo: str | None  # CANCELAMENTO, PROBLEMA_PRODUTO, ESTORNO; None = perguntar qual
+    motivo: str | None = None  # já dito na frase (ex.: DESISTI, COBRANCA_ERRADA)
+    descreve: bool = False  # problema no produto: a frase já descreve o que aconteceu
+
+
+def pedido_de_devolucao(texto: str) -> PedidoDeDevolucao | None:
+    mensagem = normalizar(texto)
+    if _contem(mensagem, _PROBLEMA_NO_PRODUTO):
+        return PedidoDeDevolucao("PROBLEMA_PRODUTO", "OUTRO", descreve=not _contem(mensagem, _GENERICOS_DO_PRODUTO))
+    if _contem(mensagem, _COBRANCA_ERRADA):
+        return PedidoDeDevolucao("ESTORNO", "COBRANCA_ERRADA")
+    if _contem(mensagem, _ESTORNO):
+        return PedidoDeDevolucao("ESTORNO")
+    for frase, motivo in _CANCELAMENTO.items():
+        if _contem(mensagem, (frase,)):
+            return PedidoDeDevolucao("CANCELAMENTO", motivo)
+    if _contem(mensagem, _DEVOLUCAO_GENERICA):
+        return PedidoDeDevolucao(None)
+    return None

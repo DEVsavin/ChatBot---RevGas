@@ -414,3 +414,23 @@ def test_com_atender_todos_a_ia_continua_so_para_a_equipe(tmp_path):
 
     assert len(enviadas) > 0  # foi atendido (só pelo roteiro)
     assert ia.recebidos == []
+
+
+# --- devolução na conversa (fase C) de ponta a ponta pelo WAHA simulado -------------------
+
+
+def test_cancelamento_pelo_waha_com_resumo_confirmacao_e_fila(tmp_path):
+    waha = WahaSimulado(tmp_path)
+    respostas = waha.conversa("oi", "sim", "1", "2", "sim", "1", "1")  # um pedido registrado
+    assert respostas[-1].startswith("Pedido registrado!")
+    operacoes_antes = len(waha.api.operacoes)
+
+    respostas = waha.conversa("quero cancelar", "1", "1", "não")
+    assert "Confirma? 1) sim 2) não" in respostas[-1]
+    final = waha.conversa("1")[-1]
+    waha.atendimento.desligar()
+
+    assert "protocolo DEV-" in final
+    novas = waha.api.operacoes[operacoes_antes:]
+    assert set(novas) <= {"buscar_clientes", "buscar_vendas"}  # a devolução só leu o ERP
+    assert "CANCELAMENTO" in (tmp_path / "fila.html").read_text(encoding="utf-8")

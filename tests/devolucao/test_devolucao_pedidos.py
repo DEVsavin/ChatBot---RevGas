@@ -360,3 +360,36 @@ def test_item_de_venda_sem_cliente_e_ignorado_e_nao_vaza():
     api.roteirizar("buscar_vendas", Resposta(200, {"data": [{"sem_id": 1}], "pagination": {}}))
 
     assert devolucao(api).pedidos_do_cliente(TELEFONE) == NenhumPedido()
+
+
+# --- devolução na conversa (DC1): cliente fixo no --venda-real e montagem -----------------
+
+
+def test_cliente_fixo_lista_as_vendas_dele_sem_buscar_cliente():
+    api = nova_api()
+    venda = semear(api, dias_atras=1, cliente=5700355)
+    semear(api, cliente=77)  # de outra pessoa: não aparece
+    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
+    d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, cliente_fixo=5700355)
+
+    resultado = d.pedidos_do_cliente(TELEFONE)
+
+    assert "buscar_clientes" not in api.operacoes  # /customers dá 403 na chave real
+    assert isinstance(resultado, PedidosEncontrados)
+    assert resultado.customer_id == 5700355
+    assert [p.id for p in resultado.pedidos] == [venda["id"]]
+
+
+def test_montagem_cria_a_devolucao_com_a_mesma_api_cadenciada(tmp_path):
+    from revgas_chatbot.montagem import ConfigVendaReal, montar
+
+    api = nova_api()
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={})
+    d = programa.dependencias.devolucao
+    assert isinstance(d, Devolucao)
+    assert d._api is programa.dependencias.api  # noqa: SLF001 - Q2: um só controle de 1 req/s
+    assert d._cliente_fixo is None  # noqa: SLF001
+
+    real = montar(tmp_path, relogio=api.relogio, api=api, ambiente={},
+                  venda_real=ConfigVendaReal(url="https://api.exemplo.test/v1", chave="k", cliente_demo=5700355))
+    assert real.dependencias.devolucao._cliente_fixo == 5700355  # noqa: SLF001

@@ -99,7 +99,7 @@ _SO_TEXTO = {"OUTRO": "descrito pelo cliente"}
 # VAZAMENTO tem fluxo próprio; VENDA e COMPROVANTE_PIX vêm de outros fluxos.
 REGRAS = {
     "CANCELAMENTO": RegraDoTipo(
-        motivos={"DESISTI": "desisti", "DEMOROU": "demorou", "PEDI_ERRADO": "pedi errado", "OUTRO": "outro"},
+        motivos={"DESISTI": "desisti", "PEDI_ERRADO": "pedi errado", "OUTRO": "outro"},  # DC-4: sem "demorou"
         preferencia="opcional",  # o pedido pode nem ter sido pago
     ),
     "ESTORNO": RegraDoTipo(
@@ -135,6 +135,7 @@ class Devolucao:
         relogio: Relogio,
         fila: FilaDeAtendimento,
         prazo_dias: int = 7,
+        cliente_fixo: int | None = None,  # --venda-real: /customers dá 403 (D16)
     ) -> None:
         if not isinstance(api, ApiCadenciada):
             # Uma API crua aqui criaria um segundo controle de ritmo (ou nenhum).
@@ -143,6 +144,12 @@ class Devolucao:
         self._relogio = relogio
         self._fila = fila
         self._prazo_dias = prazo_dias
+        self._cliente_fixo = cliente_fixo
+
+    @property
+    def usa_cliente_fixo(self) -> bool:
+        """Modo real: os pedidos vêm do cliente de demonstração, não do telefone."""
+        return self._cliente_fixo is not None
 
     def pedidos_do_cliente(self, telefone: str) -> ResultadoDaBusca:
         """Até 3 pedidos do cliente no prazo de devolução, mais recentes primeiro.
@@ -160,6 +167,9 @@ class Devolucao:
         Qualquer falha ou ambiguidade vira `TransferirAtendente`; nada encontrado
         vira `NenhumPedido`.
         """
+        if self._cliente_fixo is not None:
+            # Modo real: as vendas do cliente de demonstração, sem buscar pelo telefone.
+            return self._pedidos_de(self._cliente_fixo, None)
         try:
             resposta = self._api.buscar_clientes(telefone)
         except TempoEsgotado:
@@ -174,8 +184,10 @@ class Devolucao:
         if len(clientes) > 1:
             return TransferirAtendente("mais de um cliente com o mesmo telefone")
         [cliente] = clientes
-        customer_id = cliente["id"]
+        nome = cliente.get("name")
+        return self._pedidos_de(cliente["id"], nome if isinstance(nome, str) else None)
 
+    def _pedidos_de(self, customer_id: int, nome: str | None) -> ResultadoDaBusca:
         hoje = self._relogio.agora().astimezone(FUSO_TERESINA).date()
         inicio = hoje - timedelta(days=self._prazo_dias)
         vendas = []
@@ -214,10 +226,9 @@ class Devolucao:
         if not do_cliente_no_prazo:
             return NenhumPedido()
         do_cliente_no_prazo.sort(key=lambda par: par[0], reverse=True)  # mais novo primeiro
-        nome = cliente.get("name")
         return PedidosEncontrados(
             customer_id=customer_id,
-            nome=nome if isinstance(nome, str) else None,
+            nome=nome,
             pedidos=tuple(pedido for _, pedido in do_cliente_no_prazo[:MAXIMO_DE_PEDIDOS]),
         )
 
@@ -232,6 +243,7 @@ class Devolucao:
         motivo: str,
         texto: str | None = None,
         preferencia: str | None = None,
+        nota: str | None = None,  # observação do sistema para a equipe (ex.: por que não há pedido)
     ) -> ResultadoDaSolicitacao:
         """Abre a solicitação na fila para uma pessoa da equipe resolver.
 
@@ -287,6 +299,8 @@ class Devolucao:
         if preferencia is not None:
             rotulo = "Preferência" if regra.preferencia == "obrigatoria" else "Preferência, se houver valor a devolver"
             linhas.append(f"{rotulo}: {PREFERENCIAS[preferencia]}")
+        if nota:
+            linhas.append(nota)
         protocolo = self._fila.abrir(
             tipo,
             telefone,

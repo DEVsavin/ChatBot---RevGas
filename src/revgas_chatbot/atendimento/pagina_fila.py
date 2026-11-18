@@ -20,14 +20,15 @@ from revgas_chatbot.fuso import FUSO_TERESINA
 if TYPE_CHECKING:
     from revgas_chatbot.atendimento.fila import Solicitacao
 
-URGENTE = "URGENTE"  # mesmo valor de fila.URGENTE (import direto seria circular)
+URGENTE = "URGENTE"  # mesmos valores de fila.URGENTE/ALTA (import direto seria circular)
+ALTA = "ALTA"
 
 
 def _artigo(solicitacao: Solicitacao) -> str:
     s = solicitacao
     horario = s.criada_em.astimezone(FUSO_TERESINA).strftime("%d/%m/%Y %H:%M")
     urgente = s.prioridade == URGENTE
-    selo = f'<strong class="selo">{URGENTE}</strong> ' if urgente else ""
+    selo = f'<strong class="selo">{escape(s.prioridade)}</strong> ' if s.prioridade in (URGENTE, ALTA) else ""
     linhas = [
         f"<h2>{selo}{escape(s.protocolo)} · {escape(s.tipo)}</h2>",
         f"<p>Aberta em {escape(horario)}</p>",
