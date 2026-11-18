@@ -153,7 +153,7 @@ src/revgas_chatbot/
 ├── vendas/              pedido, validação, registro da venda e script da venda de teste
 ├── api_revgas/          API RevGás: interface, versão falsa, versão real e limite de 1 req/s
 ├── atendimento/         fila de solicitações para a equipe e sua página
-├── devolucao/           busca de pedidos e solicitação de devolução (ainda não ligada aos canais)
+├── devolucao/           pedidos do cliente e solicitações de cancelamento, troca e devolução de valor
 └── montagem.py          liga as peças e escolhe a API falsa ou a real
 tests/                   testes, na mesma divisão de pastas do código
 docker-compose.waha.yml  contêiner do WAHA
@@ -253,6 +253,20 @@ Pelo chat no terminal (ou no navegador, digitando o mesmo telefone):
 | 1 | **Pedido completo** (cliente cadastrado) | `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar) |
 | 2 | **Cliente novo com correção** | `--telefone 5500900000002` → `sim` → nome → `1` → `1` → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar) |
 | 3 | **Transferência para a equipe** | Em qualquer momento, `quero falar com um atendente` ou `estou sentindo cheiro de gás`; a solicitação aparece em `dados/fila.html` (o vazamento como URGENTE, no topo) |
+| 4 | **Cancelamento** | Depois do cenário 1, na mesma conversa: `quero cancelar` → `1` (o pedido) → `1` (desisti) → `não` (ainda não pagou) → `1` (confirmar). Sai o protocolo `DEV-…` |
+| 5 | **Problema no produto** | Depois do cenário 1: `veio com lacre violado` → `1` (o pedido) → `1` (confirmar). A solicitação entra na fila como **ALTA** |
+| 6 | **Cobrança errada** | Depois do cenário 1: `paguei duas vezes` → `1` (o pedido) → `2` (dinheiro de volta) → `1` (confirmar) |
+
+### ↩️ Devolução
+
+O cliente pede cancelamento, troca por problema no produto ou devolução de valor com as próprias palavras ("quero cancelar", "veio com lacre violado", "paguei duas vezes"). O chatbot mostra até 3 pedidos dos últimos 7 dias, pergunta o motivo (e, se houver valor a devolver, se prefere crédito ou dinheiro de volta), mostra um resumo para o cliente confirmar e abre uma solicitação `DEV-…` na fila.
+
+> [!IMPORTANT]
+> O chatbot **só lê** o ERP: nunca cancela, nunca devolve dinheiro e nunca pede chave PIX ou dados bancários. Quem decide é a equipe.
+
+- "Cheiro de gás" ou "veio vazando" seguem sempre o caminho do vazamento (orientações de segurança e URGENTE).
+- No meio de um pedido, qualquer pedido de devolução pergunta antes se o cliente quer continuar este pedido, desistir dele ou falar de um pedido já feito: nada é descartado sem ele escolher.
+- Os pedidos só aparecem para o número do próprio cliente. Com `--venda-real`, aparecem os do cliente de demonstração.
 
 > [!NOTE]
 > As orientações de segurança para vazamento (`config/seguranca.txt`) são provisórias e ainda serão validadas com a revenda.
