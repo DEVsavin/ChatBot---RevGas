@@ -61,7 +61,7 @@ def test_numero_ficticio_comeca_a_conversa_e_reconhece_a_maria(cliente):
 
 def test_pedido_completo_pela_web(cliente, api):
     sessao = iniciar(cliente)["sessao"]
-    for texto in ("sim", "1", "2", "sim", "1"):
+    for texto in ("sim", "2", "sim", "1"):
         enviar(cliente, sessao, texto)
 
     assert enviar(cliente, sessao, "1").startswith("Pedido registrado!")
@@ -76,19 +76,19 @@ def test_numero_real_e_tratado_como_digitado_e_sem_ia(cliente, api, ia):
 
     assert "Qual é o seu nome?" in enviar(cliente, inicio["sessao"], "sim")
     enviar(cliente, inicio["sessao"], "Fulano")
-    enviar(cliente, inicio["sessao"], "quero 2 botijões, por favor")  # o roteiro não entende
+    enviar(cliente, inicio["sessao"], "manda o de sempre, por favor")  # o roteiro não entende
 
     assert ia.recebidos == []  # nenhum texto foi para a IA
     assert api.operacoes == []  # nenhuma busca de cadastro
 
 
 def test_com_numero_ficticio_a_ia_e_usada(cliente, ia):
-    ia.respostas["quero 2 botijões"] = Interpretacao(intencao="PEDIR", produto="botijão de gás", quantidade=2)
+    ia.respostas["manda o de sempre"] = Interpretacao(intencao="PEDIR", produto="botijão de gás", quantidade=2)
     sessao = iniciar(cliente)["sessao"]
     enviar(cliente, sessao, "sim")
 
-    assert "Entregar em" in enviar(cliente, sessao, "quero 2 botijões")
-    assert [t for t, _ in ia.recebidos] == ["quero 2 botijões"]
+    assert "Entregar em" in enviar(cliente, sessao, "manda o de sempre")
+    assert [t for t, _ in ia.recebidos] == ["manda o de sempre"]
 
 
 @pytest.mark.parametrize("telefone", ["", "abc", "123", "１１９９９９９００００"])
@@ -192,7 +192,7 @@ def test_trocar_para_numero_real_no_meio_da_conversa_desliga_a_ia(cliente, ia):
     sessao = iniciar(cliente)["sessao"]
     for texto in ("não", REAL, "sim", "Fulano"):
         enviar(cliente, sessao, texto)
-    enviar(cliente, sessao, "quero 2 botijões, por favor")
+    enviar(cliente, sessao, "manda o de sempre, por favor")
 
     assert ia.recebidos == []
 
@@ -291,7 +291,7 @@ def test_modo_real_nao_busca_cadastro_e_pede_o_nome(real, api):
 
 def test_modo_real_pedido_completo_usa_o_cliente_fixo(real, api):
     sessao = iniciar(real)["sessao"]
-    for texto in ("sim", "Fulano", "1", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1"):
         enviar(real, sessao, texto)
     resposta = enviar(real, sessao, "1")
 
@@ -317,9 +317,9 @@ def test_modo_real_ia_so_para_a_equipe(real, ia, numero, usa_ia):
     assert inicio["ia_ligada"] is usa_ia
     enviar(real, inicio["sessao"], "sim")
     enviar(real, inicio["sessao"], "Fulano")
-    enviar(real, inicio["sessao"], "quero 2 botijões, por favor")
+    enviar(real, inicio["sessao"], "manda o de sempre, por favor")
 
-    assert ("quero 2 botijões, por favor" in [t for t, _ in ia.recebidos]) is usa_ia
+    assert ("manda o de sempre, por favor" in [t for t, _ in ia.recebidos]) is usa_ia
 
 
 def test_comando_com_venda_real_liga_e_avisa(tmp_path, capsys):
@@ -354,3 +354,11 @@ def test_comando_com_venda_real_e_configuracao_errada_nao_liga(tmp_path, mudanca
     assert chamadas == []
     assert nome in str(erro.value)
     assert "chave-ficticia" not in str(erro.value)
+
+
+def test_06_cancelamento_no_chat_web_mostra_o_nome_do_produto(cliente):
+    sessao = iniciar(cliente)["sessao"]
+    for texto in ("sim", "3", "sim", "1", "1"):
+        enviar(cliente, sessao, texto)
+
+    assert "3x botijão de gás" in enviar(cliente, sessao, "quero cancelar")

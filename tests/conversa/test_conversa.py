@@ -21,7 +21,10 @@ from revgas_chatbot.vendas.registro import RegistradorDeVendas
 
 TELEFONE = "5500900000001"  # DDD 00: fictício
 SEGURANCA = "ORIENTAÇÕES DE SEGURANÇA (texto de teste)"
-CATALOGO = {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
+CATALOGO = {
+    26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00")),
+    26255: ProdutoCatalogo(nome="água 20 L", preco=Decimal("15.00")),  # 2 produtos: a lista aparece (ticket 04)
+}
 PAGAMENTOS = {"PIX", "MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO"}
 MARIA = {
     "id": 77,
@@ -106,7 +109,7 @@ def test_cliente_cadastrado_faz_pedido_completo(conversa, api):
     assert venda["payments"] == [{"payment_type": "PIX", "value": Decimal("220.00")}]
     assert texto(confirmacao) == (
         f"Pedido registrado! Número {venda['id']}, total R$ 220,00. "
-        "Para cancelar ou mudar o pedido, escreva atendente."
+        "Para cancelar, escreva cancelar. Para outra coisa, escreva atendente."  # ticket 09
     )
 
 
@@ -120,7 +123,7 @@ def test_cliente_cadastrado_faz_pedido_completo(conversa, api):
         (("sim",), "9", "Escolha um número da lista.", "O que você quer pedir?"),
         (("sim", "1"), "0", "Envie um número de 1 a 10.", "Quantos?"),
         (("sim", "1"), "11", "Envie um número de 1 a 10.", "Quantos?"),
-        (("sim", "1"), "dois", "Envie um número de 1 a 10.", "Quantos?"),
+        (("sim", "1"), "muitos", "Envie um número de 1 a 10.", "Quantos?"),  # "dois" agora vale 2 (ticket 03)
         (("sim", "1", "2"), "talvez", "Responda sim ou não.", "Entregar em Rua Exemplo"),
         (("sim", "1", "2", "sim"), "7", "Escolha um número da lista.", "Como vai pagar?"),
         (("sim", "1", "2", "sim", "1"), "talvez", "Escolha um número da lista.", "1) confirmar"),
@@ -550,7 +553,7 @@ def test_palavras_de_comando_dentro_de_respostas_nao_sequestram(conversa_nova, a
     assert respostas[-1][0] == "Escolha um número da lista."  # 'pessoalmente' não é comando
     assert fila.listar_abertas() == []
     resumo = [conversa_nova.responder("1")]
-    assert "Rua do Atendente, 10, S/N" in texto(resumo[0])
+    assert "Rua do Atendente, S/N" in texto(resumo[0])  # ticket 01: só o trecho antes da vírgula
 
 
 # --- C1e: fila quebrada ---------------------------------------------------------------
@@ -688,3 +691,152 @@ def test_resumo_sem_complemento_nem_referencia_nao_mostra_as_linhas(conversa_nov
                          "PI", "pular", "pular", "1")
 
     assert "Complemento:" not in texto(resumo) and "Referência:" not in texto(resumo)
+
+
+# --- Achados de 18/11 (spec-achados-1118.md) ------------------------------------------------
+# Ticket 01: a rua não aceita o endereço inteiro (sem IA).
+
+ENDERECO_INTEIRO = "na rua teste, bairro parque piaui, 8311, teresina piaui pagar no credito"
+
+
+def test_01_endereco_inteiro_na_rua_aproveita_so_o_trecho_seguro(conversa_nova):
+    *_, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", ENDERECO_INTEIRO)
+
+    assert resposta == ["Anotei a rua: rua teste.", "Qual é o número? (ou S/N)"]
+    *_, resumo = [conversa_nova.responder(m) for m in ("10", "Centro", "Teresina", "PI", "pular", "pular", "1")]
+    rua = texto(resumo).split("Entrega: ")[1].split(",")[0]
+    assert rua == "rua teste"
+    for proibido in ("bairro", "8311", "pagar"):
+        assert proibido not in rua
+
+
+@pytest.mark.parametrize("frase", ["bairro centro 8311 pagar no pix", "8311, teresina"])
+def test_01_sem_trecho_seguro_pede_so_o_nome_da_rua(conversa_nova, frase):
+    *_, antes, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", frase)
+
+    assert resposta == ["Me diga só o nome da rua (ex.: Rua das Flores).", "Qual é a rua?"]
+
+
+@pytest.mark.parametrize("rua", ["Rua das Flores", "Av. Frei Serafim", "Rua 7 de Setembro", "Travessa São José"])
+def test_01_rua_normal_continua_aceita(conversa_nova, rua):
+    *_, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", rua)
+
+    assert resposta == ["Qual é o número? (ou S/N)"]
+
+
+def test_01_rua_com_numero_depois_da_virgula_aproveita_a_rua(conversa_nova):
+    *_, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua das Flores, 123")
+
+    assert resposta == ["Anotei a rua: Rua das Flores.", "Qual é o número? (ou S/N)"]
+
+
+# Ticket 02: "n" e variações valem como sem número.
+
+
+@pytest.mark.parametrize("resposta", ["n", "N", "S/N", "s/n", "sn", "s n", "s.n.", "sem número", "sem numero"])
+def test_02_variacoes_de_sem_numero(conversa_nova, resposta):
+    *_, seguinte = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua Nova", resposta)
+
+    assert seguinte == ["Qual é o bairro?"]
+    *_, resumo = [conversa_nova.responder(m) for m in ("Centro", "Teresina", "PI", "pular", "pular", "1")]
+    assert "Entrega: Rua Nova, S/N" in texto(resumo)
+
+
+@pytest.mark.parametrize("resposta", ["ap409", "apto 12", "bloco b", "apartamento 3"])
+def test_02_apartamento_explica_que_vai_no_complemento(conversa_nova, resposta):
+    *_, seguinte = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua Nova", resposta)
+
+    assert seguinte[0] == "O apartamento ou bloco vai no complemento."
+
+
+@pytest.mark.parametrize("resposta", ["abc", "perto do mercado", "12 13"])
+def test_02_outra_resposta_invalida_pede_o_numero_com_exemplo(conversa_nova, resposta):
+    *_, seguinte = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua Nova", resposta)
+
+    assert seguinte == ["Envie o número da casa ou do prédio (ex.: 123) ou S/N.", "Qual é o número? (ou S/N)"]
+
+
+# Ticket 03: quantidade no começo da frase (ou "N botijões" em qualquer lugar).
+
+
+@pytest.mark.parametrize("frase, quantidade", [
+    ("4 botijoes na rua teste 8311", 4), ("quero 2", 2), ("2 botijões", 2), ("dois", 2), ("quero três", 3),
+    ("me manda 3 botijões", 3), ("10", 10),
+])
+def test_03_quantidade_dentro_da_frase(conversa, api, frase, quantidade):
+    *_, seguinte = dialogo(conversa, "sim", "1", frase)
+
+    assert "Entregar em Rua Exemplo, 100" in texto(seguinte)  # o resto da frase não muda o passo seguinte
+    conversa.responder("sim")
+    resumo = conversa.responder("1")
+    assert f"{quantidade}x botijão de gás" in texto(resumo)
+
+
+@pytest.mark.parametrize("frase", ["11", "0", "quero 15 botijões", "nenhum", "uns botijões", "rua 8311"])
+def test_03_fora_de_1_a_10_ou_sem_numero_continua_recusado(conversa, frase):
+    *_, seguinte = dialogo(conversa, "sim", "1", frase)
+
+    assert seguinte == ["Envie um número de 1 a 10.", "Quantos?"]
+
+
+# Ticket 05 (Q4): na 2ª recusa seguida da mesma pergunta, exemplo + "escreva atendente".
+
+AJUDA = "ou escreva atendente para falar com uma pessoa"
+
+
+def test_05_primeira_recusa_e_a_de_hoje_e_a_segunda_traz_exemplo(conversa):
+    *_, primeira = dialogo(conversa, "sim", "1", "abc")
+    assert primeira == ["Envie um número de 1 a 10.", "Quantos?"]
+
+    segunda = conversa.responder("abc")
+    assert AJUDA in texto(segunda)
+    assert "Exemplo: 2" in texto(segunda)
+    assert segunda[-1] == "Quantos?"  # a pergunta continua por último
+
+
+def test_05_resposta_aceita_zera_a_contagem(conversa):
+    dialogo(conversa, "sim", "1", "abc", "abc")
+    conversa.responder("2")  # aceita: vai para o endereço do cadastro
+    primeira_de_novo = conversa.responder("talvez")
+
+    assert AJUDA not in texto(primeira_de_novo)
+    assert AJUDA in texto(conversa.responder("talvez"))
+
+
+def test_05_nunca_transfere_sozinho(conversa, fila):
+    dialogo(conversa, "sim", "1", *["abc"] * 6)
+
+    assert fila.listar_abertas() == []
+    assert not conversa.encerrada
+
+
+def test_05_no_endereco_conta_por_campo(conversa_nova):
+    dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua Nova", "abc")
+    segunda = conversa_nova.responder("abc")
+
+    assert AJUDA in texto(segunda) and "123" in texto(segunda)
+    conversa_nova.responder("10")  # aceito → bairro
+    assert AJUDA not in texto(conversa_nova.responder(" "))
+
+
+# Ticket 01, I1 da revisão: rua de verdade com "cidade"/"bairro" no nome; repetir aceita.
+
+
+@pytest.mark.parametrize("rua", ["Rua Cidade Nova", "Avenida Cidade Jardim", "Travessa Bairro Novo"])
+def test_01_rua_com_cidade_ou_bairro_no_nome_e_aceita(conversa_nova, rua):
+    *_, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", rua)
+
+    assert resposta == ["Qual é o número? (ou S/N)"]
+
+
+def test_01_repetir_a_mesma_rua_depois_da_recusa_aceita(conversa_nova):
+    *_, recusa = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "Rua do Pagamento")
+    assert recusa == ["Me diga só o nome da rua (ex.: Rua das Flores).", "Qual é a rua?"]
+
+    assert conversa_nova.responder("Rua do Pagamento") == ["Qual é o número? (ou S/N)"]
+
+
+def test_01_bairro_com_numero_sem_virgula_ainda_e_endereco_inteiro(conversa_nova):
+    *_, resposta = dialogo(conversa_nova, "sim", "Joana Teste", "1", "1", "rua teste bairro centro 8311")
+
+    assert resposta[0] == "Me diga só o nome da rua (ex.: Rua das Flores)."

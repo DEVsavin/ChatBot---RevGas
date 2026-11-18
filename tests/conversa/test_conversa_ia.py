@@ -23,7 +23,10 @@ from revgas_chatbot.vendas.registro import RegistradorDeVendas
 TELEFONE = "5500900000001"
 NOVO = "5500900000002"
 SEGURANCA = "ORIENTAÇÕES DE SEGURANÇA (texto de teste)"
-CATALOGO = {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
+CATALOGO = {
+    26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00")),
+    26255: ProdutoCatalogo(nome="água 20 L", preco=Decimal("15.00")),  # 2 produtos: a lista aparece (ticket 04)
+}
 PAGAMENTOS = {"PIX", "MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO"}
 MARIA = {
     "id": 77, "name": "Maria Exemplo", "phones": [TELEFONE], "location": "Rua Exemplo",
@@ -216,7 +219,7 @@ def test_so_o_texto_digitado_vai_para_a_ia_e_com_numeros_longos_mascarados(conve
     [(enviado, contexto)] = ia.recebidos
     assert "789" not in enviado
     assert "[número omitido]" in enviado
-    assert contexto.produtos == ("botijão de gás",)
+    assert contexto.produtos == ("botijão de gás", "água 20 L")
     tudo = enviado + repr(contexto)
     for do_cadastro in ("Maria", "Rua Exemplo", TELEFONE, "77"):
         assert do_cadastro not in tudo
@@ -261,13 +264,14 @@ def test_endereco_numa_frase_com_complemento_nao_pergunta_o_complemento(conversa
     assert "Ponto de referência?" in texto(rua)
 
 
-def test_sem_ia_o_texto_inteiro_vira_a_rua(conversa, ia):
-    # S3: a IA devolve None → como no C1.
+def test_sem_ia_o_endereco_inteiro_nao_vira_a_rua(conversa, ia):
+    # S3: a IA devolve None. Ticket 01 (18/11): o endereço inteiro não vira a rua;
+    # o trecho antes da 1ª vírgula é aproveitado.
     *_, rua = dialogo(conversa, *ATE_A_RUA, FRASE)
 
-    assert "Qual é o número?" in texto(rua)
+    assert texto(rua) == "Anotei a rua: Rua Nova.\nQual é o número? (ou S/N)"
     *_, resumo = [conversa.responder(m) for m in ("10", "Centro", "Teresina", "PI", "pular", "pular", "1")]
-    assert f"Entrega: {FRASE}, 10" in texto(resumo)
+    assert "Entrega: Rua Nova, 10 — Centro, Teresina, Piauí" in texto(resumo)
 
 
 def test_frase_sem_a_rua_preenche_o_que_veio_e_pergunta_a_rua(conversa, ia):
@@ -492,7 +496,7 @@ def test_4_pedido_registrado_diz_como_cancelar(conversa):
     [mensagem] = _pedido_registrado(conversa)
 
     assert mensagem.startswith("Pedido registrado!")
-    assert "Para cancelar ou mudar o pedido, escreva atendente." in mensagem
+    assert "Para cancelar, escreva cancelar. Para outra coisa, escreva atendente." in mensagem  # ticket 09
 
 
 def test_4_numero_solto_depois_do_pedido_explica_sem_recomecar(conversa, api):
@@ -517,3 +521,53 @@ def test_4_novo_pedido_depois_do_pedido_recomeca(conversa):
     _pedido_registrado(conversa)
 
     assert conversa.responder("novo pedido")[0].startswith("Olá! Sou o atendente virtual")
+
+
+# --- Ticket 04 (Q3): com um produto só no catálogo, a pergunta do produto é pulada ----------
+
+
+@pytest.fixture
+def um_produto(dependencias):
+    so_botijao = {26717: CATALOGO[26717]}
+    return replace(dependencias, catalogo=so_botijao)
+
+
+def test_04_um_produto_vai_direto_para_a_quantidade(um_produto, api):
+    conversa = Conversa(TELEFONE, um_produto)
+    *_, resposta = dialogo(conversa, "sim")
+
+    assert resposta == ["Olá, Maria!", "Botijão de gás (R$ 110,00). Quantos?"]
+    conversa.responder("2")
+    conversa.responder("sim")
+    conversa.responder("1")
+    assert conversa.responder("1")[0].startswith("Pedido registrado!")
+    assert [p["quantity"] for p in api.vendas_criadas()[0]["products"]] == [2]
+
+
+def test_04_cliente_novo_com_um_produto(um_produto):
+    conversa = Conversa(NOVO, um_produto)
+    *_, resposta = dialogo(conversa, "sim", "Fulano")
+
+    assert resposta == ["Olá, Fulano!", "Botijão de gás (R$ 110,00). Quantos?"]
+
+
+def test_04_dois_produtos_continuam_com_a_lista(dependencias):
+    conversa = Conversa(TELEFONE, dependencias)  # o catálogo de teste tem 2 produtos
+    *_, resposta = dialogo(conversa, "sim")
+
+    assert resposta[1].startswith("O que você quer pedir?\n1) botijão de gás")
+
+
+def test_04_ia_preenche_a_quantidade_na_mesma_frase(um_produto, ia):
+    ia.respostas["quero 2 botijões, por favor"] = pedir(produto="botijão de gás", quantidade=2)
+    conversa = Conversa(TELEFONE, um_produto)
+    *_, resposta = dialogo(conversa, "sim", "quero 2 botijões, por favor")
+
+    assert "Entregar em Rua Exemplo, 100" in texto(resposta)
+
+
+def test_04_corrigir_produto_com_um_produto_pergunta_a_quantidade(um_produto, api):
+    conversa = Conversa(TELEFONE, um_produto)
+    dialogo(conversa, "sim", "2", "sim", "1", "2")  # no resumo → corrigir
+    assert conversa.responder("1") == ["Botijão de gás (R$ 110,00). Quantos?"]
+    assert "3x botijão de gás" in texto(conversa.responder("3"))

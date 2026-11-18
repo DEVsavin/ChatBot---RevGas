@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Mapping
 
 from revgas_chatbot.api_revgas.api import Relogio, TempoEsgotado
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
@@ -16,7 +17,7 @@ from revgas_chatbot.atendimento.atendimento import TransferirAtendente
 from revgas_chatbot.atendimento.fila import TIPOS as TIPOS_DA_FILA
 from revgas_chatbot.atendimento.fila import FilaDeAtendimento
 from revgas_chatbot.fuso import FUSO_TERESINA
-from revgas_chatbot.vendas.pedido import Problema
+from revgas_chatbot.vendas.pedido import Problema, ProdutoCatalogo
 from revgas_chatbot.vendas.venda import reais
 
 
@@ -34,6 +35,7 @@ class PedidoDoCliente:
     itens: tuple[tuple[str, int], ...]  # (descrição, quantidade)
     total: Decimal
     status: str  # status da API: só para o atendente (o significado para o cliente é pendente)
+    pagamentos: tuple[str, ...] | None = None  # ticket 07: formas de pagamento; None = desconhecidas
 
     @property
     def cancelado(self) -> bool:
@@ -136,6 +138,7 @@ class Devolucao:
         fila: FilaDeAtendimento,
         prazo_dias: int = 7,
         cliente_fixo: int | None = None,  # --venda-real: /customers dá 403 (D16)
+        catalogo: Mapping[int, ProdutoCatalogo] | None = None,  # ticket 06: nome do produto
     ) -> None:
         if not isinstance(api, ApiCadenciada):
             # Uma API crua aqui criaria um segundo controle de ritmo (ou nenhum).
@@ -145,6 +148,7 @@ class Devolucao:
         self._fila = fila
         self._prazo_dias = prazo_dias
         self._cliente_fixo = cliente_fixo
+        self._nomes = {pid: p.nome for pid, p in (catalogo or {}).items()}
 
     @property
     def usa_cliente_fixo(self) -> bool:
@@ -217,7 +221,7 @@ class Devolucao:
         # ou de outra pessoa é simplesmente ignorada, mesmo se vier estranha.
         do_cliente = [v for v in vendas if _inteiro(v.get("customer_id")) and v["customer_id"] == customer_id]
         try:
-            convertidas = [_venda(v) for v in do_cliente]
+            convertidas = [_venda(v, self._nomes) for v in do_cliente]
         except _VendaInvalida:
             return TransferirAtendente("resposta inesperada da API ao buscar os pedidos")
         do_cliente_no_prazo = [
@@ -345,7 +349,7 @@ def _tem_proxima(dados: dict) -> bool:
     return isinstance(paginacao, dict) and paginacao.get("has_next") is True
 
 
-def _venda(venda: dict) -> tuple[datetime, PedidoDoCliente]:
+def _venda(venda: dict, nomes: Mapping[int, str] | None = None) -> tuple[datetime, PedidoDoCliente]:
     """(criada_em, pedido) de uma venda do cliente; lança _VendaInvalida."""
     try:
         if not _inteiro(venda.get("id")):
@@ -362,7 +366,8 @@ def _venda(venda: dict) -> tuple[datetime, PedidoDoCliente]:
                 raise _VendaInvalida("quantidade")
             descricao = p.get("product_description")
             if not isinstance(descricao, str) or not descricao.strip():
-                descricao = f"produto {p.get('product_id')}"
+                # Ticket 06: sem descrição, o nome do catálogo; "produto N" só se não estiver nele.
+                descricao = (nomes or {}).get(p.get("product_id")) or f"produto {p.get('product_id')}"
             itens.append((descricao, p["quantity"]))
         total = Decimal(str(venda["total"]))
         if not total.is_finite():
@@ -372,11 +377,20 @@ def _venda(venda: dict) -> tuple[datetime, PedidoDoCliente]:
             raise _VendaInvalida("status")
     except (KeyError, TypeError, ValueError, ArithmeticError) as erro:
         raise _VendaInvalida(str(erro)) from erro
+    pagamentos = venda.get("payments")
+    formas = (
+        tuple(p["payment_type"] for p in pagamentos)
+        if isinstance(pagamentos, list)
+        and pagamentos
+        and all(isinstance(p, dict) and isinstance(p.get("payment_type"), str) for p in pagamentos)
+        else None
+    )
     pedido = PedidoDoCliente(
         id=venda["id"],
         data=criada_em.astimezone(FUSO_TERESINA).date(),
         itens=tuple(itens),
         total=total,
         status=status,
+        pagamentos=formas,
     )
     return criada_em, pedido

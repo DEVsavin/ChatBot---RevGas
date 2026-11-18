@@ -75,6 +75,8 @@ class ApiRevGasFalsa:
     # Modo "mal comportado": a listagem de vendas ignora os filtros (cliente,
     # canal, datas) e devolve tudo em ordem embaralhada (semente fixa).
     ignora_filtros_de_vendas: bool = False
+    # Ticket 06: como a real, a venda volta com `product_description` (product_id -> nome).
+    descricoes: dict[int, str] = field(default_factory=dict)
     _roteiro: dict[str, deque] = field(default_factory=lambda: defaultdict(deque))
     _proximo_id: int = 1000
     _buscas_de_vendas: int = 0
@@ -158,8 +160,15 @@ class ApiRevGasFalsa:
 
     def _criar_venda(self, corpo: dict[str, Any]) -> Resposta:
         total = sum((Decimal(str(p["value"])) * p["quantity"] for p in corpo["products"]), Decimal("0"))
+        produtos = [
+            {**p, "product_description": self.descricoes[p.get("product_id")]}
+            if p.get("product_id") in self.descricoes and "product_description" not in p
+            else dict(p)
+            for p in corpo["products"]
+        ]
         venda = {
             **corpo,
+            "products": produtos,
             "id": self._novo_id(),
             "status": "ACTIVE",
             "total": total,

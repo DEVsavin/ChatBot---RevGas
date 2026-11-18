@@ -21,7 +21,10 @@ from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.conversa.entrada import (
     com_nono_digito,
     comando,
+    fala_de_apartamento,
     ja_informado,
+    quantidade_do_texto,
+    rua_do_texto,
     PedidoDeDevolucao,
     pedido_de_devolucao,
     normalizar,
@@ -89,6 +92,7 @@ MENU_DA_DEVOLUCAO = "Posso ajudar com:\n" + "\n".join(f"{n}) {o}" for n, o in en
 PERGUNTA_DA_PREFERENCIA = (
     "Se houver valor a devolver, você prefere:\n1) crédito na próxima compra\n2) dinheiro de volta"
 )
+ENSINA_O_POS_VENDA = "Para cancelar, escreva cancelar. Para outra coisa, escreva atendente."  # ticket 09
 ACAO_DA_DEVOLUCAO = {
     "CANCELAMENTO": "cancelar o pedido",
     "ESTORNO": "devolver o valor do pedido",
@@ -124,6 +128,39 @@ CAMPOS_DO_ENDERECO = [
     ("referencia", "Ponto de referência? (ou 'pular')", True, ""),
 ]
 
+
+# Ticket 05 (Q4): exemplo do que se espera em cada pergunta (2ª recusa seguida).
+_OPCAO = "envie só o número da opção, como 1"
+EXEMPLOS_DAS_PERGUNTAS = {
+    "CONFIRMAR_NUMERO": "responda sim ou não",
+    "CONFIRMAR_NUMERO_DIGITADO": "responda sim ou não",
+    "DIGITAR_NUMERO": "(86) 99999-0000",
+    "NOME": "Maria Silva",
+    "PRODUTO": _OPCAO,
+    "QUANTIDADE": "2",
+    "ENDERECO_DO_CADASTRO": "responda sim ou não",
+    "PAGAMENTO": _OPCAO,
+    "TROCO": "200, ou não",
+    "RESUMO": _OPCAO,
+    "CORRIGIR": _OPCAO,
+    "RASCUNHO_OU_PEDIDO": _OPCAO,
+    "DEV_MENU": _OPCAO,
+    "DEV_PEDIDO": _OPCAO,
+    "DEV_MOTIVO": _OPCAO,
+    "DEV_TEXTO": "o botijão veio sem lacre",
+    "DEV_PAGOU": "responda sim ou não",
+    "DEV_PREFERENCIA": _OPCAO,
+    "DEV_CONFIRMAR": "1 para confirmar ou 2 para não registrar",
+}
+EXEMPLOS_DO_ENDERECO = {
+    "logradouro": "Rua das Flores",
+    "numero": "123, ou S/N",
+    "bairro": "Centro",
+    "cidade": "Teresina",
+    "estado": "PI",
+    "complemento": "Apto 12, ou pular",
+    "referencia": "perto da praça, ou pular",
+}
 
 # A1: como cada campo aparece na explicação ("Me diga <rótulo> (ex.: <exemplo>)").
 ROTULOS_DOS_CAMPOS = {
@@ -166,6 +203,10 @@ class Conversa:
         self._numero_confiavel = numero_confiavel
         self._d = dependencias
         self._ultima_venda_id: int | None = None  # para "quero cancelar" depois da venda
+        self._recusas_seguidas = 0  # ticket 05: a mesma pergunta recusada seguidas vezes
+        self._rua_recusada: str | None = None  # ticket 01: a mesma resposta de novo vira a rua
+        self._tentativa_de_devolucao: str | None = None  # ticket 09: contexto para o atendente
+        self._travou_em: str | None = None  # ticket 09: a pergunta em que a pessoa travou
         self._produtos = list(self._d.catalogo.items())
         self._formas = [t for t in ROTULOS_DE_PAGAMENTO if t in self._d.pagamentos]
         self._novo_rascunho()
@@ -201,6 +242,47 @@ class Conversa:
         ]
 
     def responder(self, texto: str) -> list[str]:
+        """Responde a mensagem. Ticket 05 (Q4): na 2ª recusa seguida da mesma pergunta,
+        acrescenta um exemplo e lembra do atendente (nunca transfere sozinho)."""
+        antes = self._chave_da_pergunta()
+        respostas = self._responder(texto)
+        if self._chave_da_pergunta() == antes and self._passo not in ("ENCERRADA", "POS_VENDA"):
+            self._recusas_seguidas += 1
+        else:
+            self._recusas_seguidas = 0
+        self._travou_em = respostas[-1] if self._recusas_seguidas >= 2 and respostas else None
+        if self._recusas_seguidas >= 2 and respostas:
+            exemplo = self._exemplo_da_pergunta()
+            ajuda = (f"Exemplo: {exemplo} — " if exemplo else "") + "ou escreva atendente para falar com uma pessoa."
+            ajuda = ajuda[:1].upper() + ajuda[1:]
+            respostas = [*respostas[:-1], ajuda, respostas[-1]]
+        return respostas
+
+    def _contexto_para_a_equipe(self) -> list[str]:
+        """Ticket 09 (Q2): o que a equipe precisa saber ao receber o repasse (vazio = como antes)."""
+        linhas = []
+        if self._ultima_venda_id is not None:
+            linhas.append(f"Último pedido: {self._ultima_venda_id}.")
+        if self._tentativa_de_devolucao:
+            linhas.append(self._tentativa_de_devolucao)
+        if self._travou_em:
+            linhas.append(f"Travou na pergunta: {self._travou_em}")
+        return linhas
+
+    def _chave_da_pergunta(self) -> tuple:
+        if self._passo == "CAMPO_DO_ENDERECO":
+            try:
+                return (self._passo, self._campo_atual()[0])
+            except StopIteration:
+                return (self._passo, None)
+        return (self._passo,)
+
+    def _exemplo_da_pergunta(self) -> str | None:
+        if self._passo == "CAMPO_DO_ENDERECO":
+            return EXEMPLOS_DO_ENDERECO.get(self._chave_da_pergunta()[1])
+        return EXEMPLOS_DAS_PERGUNTAS.get(self._passo)
+
+    def _responder(self, texto: str) -> list[str]:
         # Vazamento tem prioridade sempre, em qualquer passo (inclusive texto livre).
         pedido = comando(texto, livre=self._passo in PASSOS_DE_TEXTO_LIVRE)
         if pedido == "VAZAMENTO":
@@ -229,6 +311,7 @@ class Conversa:
             self._passo = "ENCERRADA"  # nada foi enviado ainda: só descarta o rascunho
             return ["Pedido descartado. Nada foi enviado."]
         motivo = "Cliente quer cancelar ou devolver." if pedido == "CANCELAR_OU_DEVOLVER" else "Cliente pediu atendente."
+        motivo = "\n".join([motivo, *self._contexto_para_a_equipe()])  # ticket 09 (Q2)
         dados = {"venda_id": self._ultima_venda_id} if self._ultima_venda_id is not None else None
         return self._transferir("", motivo, texto_cliente=texto, dados=dados)
 
@@ -257,8 +340,7 @@ class Conversa:
         [cliente] = clientes
         self._nome = cliente["name"]
         self._endereco_do_cadastro = _endereco_do_cadastro(cliente)
-        self._passo = "PRODUTO"
-        return [f"Olá, {self._nome.split()[0]}!", self._pergunta_produto()]
+        return [f"Olá, {self._nome.split()[0]}!", *self._perguntar_produto()]
 
     def _passo_digitar_numero(self, texto: str) -> list[str]:
         numero = telefone(texto)
@@ -300,8 +382,7 @@ class Conversa:
         self._nome = nome
         if self._corrigindo:
             return self._voltar_ao_resumo()
-        self._passo = "PRODUTO"
-        return [f"Olá, {nome.split()[0]}!", self._pergunta_produto()]
+        return [f"Olá, {nome.split()[0]}!", *self._perguntar_produto()]
 
     def _passo_produto(self, texto: str) -> list[str]:
         indice = opcao(texto, [p.nome for _, p in self._produtos])
@@ -312,10 +393,11 @@ class Conversa:
         return ["Quantos?"]
 
     def _passo_quantidade(self, texto: str) -> list[str]:
-        quantidade = texto.strip()
-        if not quantidade.isdigit() or not 1 <= int(quantidade) <= MAX_QUANTIDADE:
-            return self._nao_entendeu(texto, [f"Envie um número de 1 a {MAX_QUANTIDADE}.", "Quantos?"])
-        self._quantidade = int(quantidade)
+        quantidade = quantidade_do_texto(texto)  # ticket 03: "4 botijões na rua…" → 4
+        if quantidade is None or not 1 <= quantidade <= MAX_QUANTIDADE:
+            # extrair: com um produto só, a frase toda ("quero 2 botijões...") chega aqui (ticket 04).
+            return self._nao_entendeu(texto, [f"Envie um número de 1 a {MAX_QUANTIDADE}.", "Quantos?"], extrair=True)
+        self._quantidade = quantidade
         return self._seguir()
 
     def _passo_endereco_do_cadastro(self, texto: str) -> list[str]:
@@ -374,6 +456,15 @@ class Conversa:
                 if interpretado is not None and interpretado.campos_do_endereco:
                     self._campos.update(interpretado.campos_do_endereco)
                     return self._proximo_campo_ou_fim()
+                # Ticket 01: sem IA, o endereço inteiro não vira a rua.
+                mais_que_a_rua, trecho = rua_do_texto(valor)
+                repetida = "," not in valor and normalizar(valor) == self._rua_recusada
+                if mais_que_a_rua and not repetida:  # I1: a mesma resposta de novo é aceita
+                    if trecho is None:
+                        self._rua_recusada = normalizar(valor)
+                        return ["Me diga só o nome da rua (ex.: Rua das Flores).", pergunta]
+                    self._campos["logradouro"] = trecho
+                    return [f"Anotei a rua: {trecho}.", *self._proximo_campo_ou_fim()]
                 # Sem IA ou nada útil (S3): o texto inteiro é a rua, como no C1.
             else:
                 intencao = self._intencao_em_texto_livre(texto)
@@ -390,9 +481,12 @@ class Conversa:
             if valor is None:
                 return [explicacao, pergunta]
         elif campo == "numero":
-            valor = numero_do_endereco(valor)
-            if valor is None:  # A2: "ap409" não é o número do prédio
-                return ["O apartamento ou bloco vai no complemento.", "Qual é o número do prédio ou da casa? (ou S/N)"]
+            numero = numero_do_endereco(valor)
+            if numero is None:
+                if fala_de_apartamento(valor):  # A2: "ap409" não é o número do prédio
+                    return ["O apartamento ou bloco vai no complemento.", "Qual é o número do prédio ou da casa? (ou S/N)"]
+                return ["Envie o número da casa ou do prédio (ex.: 123) ou S/N.", pergunta]  # ticket 02
+            valor = numero
         self._campos[campo] = valor
         return self._proximo_campo_ou_fim()
 
@@ -460,7 +554,7 @@ class Conversa:
             # Sem entregador e sem prazo (RN9; a meta de 20 min não é prometida).
             return [
                 f"Pedido registrado! Número {resultado.id}, total {reais(resultado.total)}. "
-                "Para cancelar ou mudar o pedido, escreva atendente."
+                + ENSINA_O_POS_VENDA
             ]
         if isinstance(resultado, EmAndamento):
             return ["Seu pedido já está sendo registrado. Aguarde um instante."]
@@ -529,8 +623,7 @@ class Conversa:
             return self._nao_entendeu(texto, [DA_LISTA, PERGUNTA_DO_QUE_CORRIGIR])
         self._corrigindo = True
         if escolha == 0:
-            self._passo = "PRODUTO"
-            return [self._pergunta_produto()]
+            return self._perguntar_produto()
         if escolha == 1:
             return self._comecar_endereco()
         if escolha == 2:
@@ -549,9 +642,16 @@ class Conversa:
         if normalizar(texto) in ("oi", "ola", "novo pedido", "novo", "outro pedido"):
             self._novo_rascunho()
             return self.iniciar()
+        # Ticket 08 (Q1): a IA pode abrir o cancelamento aqui (só essa intenção; atendente
+        # e sair vindos da IA continuam ignorados, V3). Nada é registrado sem o "Confirma?".
+        if self._d.devolucao is not None:
+            interpretado = self._interpretar(texto)
+            if interpretado is not None and interpretado.intencao == "CANCELAR_OU_DEVOLVER":
+                tipo = "CANCELAMENTO" if "cancel" in normalizar(texto) else None
+                return self._comecar_devolucao(PedidoDeDevolucao(tipo), texto)
         return [
             f"Seu pedido número {self._ultima_venda_id} já foi registrado. "
-            "Para cancelar ou mudar o pedido, escreva atendente. Para um novo pedido, escreva novo pedido."
+            f"{ENSINA_O_POS_VENDA} Para um novo pedido, escreva novo pedido."
         ]
 
     def _passo_encerrada(self, texto: str) -> list[str]:
@@ -621,10 +721,22 @@ class Conversa:
             "pergunta": "",
         }
         mensagens = [aviso] if aviso else []
+        self._anotar_tentativa()
         if dev.tipo is None:
             self._passo = "DEV_MENU"
             return mensagens + [MENU_DA_DEVOLUCAO]
         return mensagens + self._dev_listar()
+
+    def _anotar_tentativa(self) -> None:
+        """Ticket 09: "Tentou cancelar o pedido 1001." vai junto se a pessoa pedir atendente."""
+        acao = {"CANCELAMENTO": "cancelar", "ESTORNO": "pedir a devolução do valor de",
+                "PROBLEMA_PRODUTO": "relatar um problema com"}.get(self._dev["tipo"])
+        if acao is None:
+            self._tentativa_de_devolucao = "Tentou abrir uma devolução."
+            return
+        pedido = self._pedido_escolhido()
+        alvo = f"o pedido {pedido.id}" if pedido else "um pedido"
+        self._tentativa_de_devolucao = f"Tentou {acao} {alvo}."
 
     def _passo_dev_menu(self, texto: str) -> list[str]:
         escolha = opcao(texto, OPCOES_DA_DEVOLUCAO)
@@ -633,6 +745,7 @@ class Conversa:
         if escolha == 3:
             return self._comando("ATENDENTE", texto)
         self._dev["tipo"] = ("CANCELAMENTO", "PROBLEMA_PRODUTO", "ESTORNO")[escolha]
+        self._anotar_tentativa()
         if self._dev["tipo"] == "PROBLEMA_PRODUTO":
             self._dev["motivo"] = "OUTRO"
         return self._dev_listar()
@@ -676,11 +789,21 @@ class Conversa:
         if not resposta.isdigit() or not 1 <= int(resposta) <= len(pedidos):
             return ["Escolha um número da lista.", self._lista_de_pedidos()]
         self._dev["escolha"] = int(resposta)
+        self._anotar_tentativa()
         if self._dev["tipo"] == "CANCELAMENTO" and pedidos[int(resposta) - 1].cancelado:
-            self._dev.update(tipo="ESTORNO", motivo="PEDIDO_CANCELADO_JA_PAGO")
-            return ["Esse pedido já está cancelado. Se você já pagou, posso pedir a devolução do valor.",
-                    *self._dev_preferencia()]
+            if not self._perguntar_se_pagou():  # ticket 07: pago na entrega → nada a devolver
+                self._fim_da_devolucao()
+                return ["Esse pedido já está cancelado. Como o pagamento seria na entrega, não há valor a devolver."]
+            self._dev["ja_cancelado"] = True
+            self._passo = "DEV_PAGOU"
+            return ["Esse pedido já está cancelado.", "Você já pagou esse pedido? (sim/não)"]
         return self._dev_motivo()
+
+    def _perguntar_se_pagou(self) -> bool:
+        """Ticket 07 (Q5): só no PIX (ou forma desconhecida). Dinheiro e cartão são pagos na entrega."""
+        pedido = self._pedido_escolhido()
+        formas = pedido.pagamentos if pedido else None
+        return formas is None or "PIX" in formas
 
     def _motivos(self) -> list[tuple[str, str]]:
         return list(REGRAS[self._dev["tipo"]].motivos.items())
@@ -725,6 +848,8 @@ class Conversa:
 
     def _dev_depois_do_motivo(self) -> list[str]:
         if self._dev["tipo"] == "CANCELAMENTO":
+            if not self._perguntar_se_pagou():
+                return self._dev_confirmar()  # pago na entrega: sem preferência
             self._passo = "DEV_PAGOU"
             return ["Você já pagou esse pedido? (sim/não)"]
         return self._dev_preferencia()
@@ -733,6 +858,12 @@ class Conversa:
         resposta = sim_ou_nao(texto)
         if resposta is None:
             return [SIM_OU_NAO, "Você já pagou esse pedido? (sim/não)"]
+        if self._dev.get("ja_cancelado"):
+            if not resposta:
+                self._fim_da_devolucao()
+                return ["Tudo bem: como o pedido já está cancelado e não foi pago, não há valor a devolver."]
+            self._dev.update(tipo="ESTORNO", motivo="PEDIDO_CANCELADO_JA_PAGO")
+            return self._dev_preferencia()
         return self._dev_preferencia() if resposta else self._dev_confirmar()
 
     def _dev_preferencia(self) -> list[str]:
@@ -983,6 +1114,15 @@ class Conversa:
     def _pergunta_endereco_do_cadastro(self) -> str:
         e = self._endereco_do_cadastro
         return f"Entregar em {e.logradouro}, {e.numero} — {e.bairro}, {e.cidade}? (sim/não)"
+
+    def _perguntar_produto(self) -> list[str]:
+        """Ticket 04 (Q3): com um produto só, pula a escolha e pergunta a quantidade."""
+        if len(self._produtos) == 1:
+            self._produto_id, produto = self._produtos[0]
+            self._passo = "QUANTIDADE"
+            return [f"{produto.nome[:1].upper()}{produto.nome[1:]} ({reais(produto.preco)}). Quantos?"]
+        self._passo = "PRODUTO"
+        return [self._pergunta_produto()]
 
     def _pergunta_produto(self) -> str:
         linhas = [f"{n}) {p.nome} — {reais(p.preco)}" for n, (_, p) in enumerate(self._produtos, 1)]

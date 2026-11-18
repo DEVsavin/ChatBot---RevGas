@@ -28,7 +28,7 @@ def rodar(argv, digitado, tmp_path):
 
 
 def test_pedido_completo_pelo_terminal(tmp_path):
-    codigo, saida, api = rodar(["--telefone", MARIA], "sim\n1\n2\nsim\n1\n1\n", tmp_path)
+    codigo, saida, api = rodar(["--telefone", MARIA], "sim\n2\nsim\n1\n1\n", tmp_path)
 
     assert codigo == 0
     assert "Chatbot: Olá, Maria!" in saida
@@ -64,7 +64,7 @@ def test_vazamento_aparece_na_pagina_da_fila(tmp_path):
 
 
 def test_todas_as_requisicoes_respeitam_1_segundo(tmp_path):
-    _, _, api = rodar(["--telefone", MARIA], "sim\n1\n2\nsim\n1\n1\n", tmp_path)
+    _, _, api = rodar(["--telefone", MARIA], "sim\n2\nsim\n1\n1\n", tmp_path)
 
     instantes = api.requisicoes
     assert len(instantes) == 3
@@ -98,7 +98,7 @@ def rodar_com_ambiente(argv, digitado, tmp_path, ambiente):
 
 
 def test_sem_chave_a_ia_fica_desligada_e_o_chat_funciona(tmp_path):
-    codigo, saida = rodar_com_ambiente(["--telefone", MARIA], "sim\n1\n2\nsim\n1\n1\n", tmp_path, {})
+    codigo, saida = rodar_com_ambiente(["--telefone", MARIA], "sim\n2\nsim\n1\n1\n", tmp_path, {})
 
     assert codigo == 0
     assert "IA desligada" in saida

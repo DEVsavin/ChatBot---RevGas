@@ -393,3 +393,64 @@ def test_montagem_cria_a_devolucao_com_a_mesma_api_cadenciada(tmp_path):
     real = montar(tmp_path, relogio=api.relogio, api=api, ambiente={},
                   venda_real=ConfigVendaReal(url="https://api.exemplo.test/v1", chave="k", cliente_demo=5700355))
     assert real.dependencias.devolucao._cliente_fixo == 5700355  # noqa: SLF001
+
+
+# --- Ticket 06: nome do produto na lista; ticket 07: forma de pagamento do pedido ---------
+
+CATALOGO_DE_TESTE = {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
+
+
+def _sem_descricao(api, product_id=26717, pagamentos=None):
+    venda = api.semear_venda({
+        "establishment_id": 2580, "customer_id": 77, "channel": "WHATSAPP",
+        "products": [{"product_id": product_id, "quantity": 3, "value": 110.0}],
+        **({"payments": pagamentos} if pagamentos is not None else {}),
+    }, criada_em=AGORA - timedelta(days=1))
+    for v in api.vendas:  # a API de teste não põe descrição se não souber o produto
+        for p in v.get("products", []):
+            p.pop("product_description", None)
+    return venda
+
+
+def _com_catalogo(api):
+    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
+    return Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, catalogo=CATALOGO_DE_TESTE)
+
+
+def test_06_sem_descricao_usa_o_nome_do_catalogo():
+    api = nova_api()
+    _sem_descricao(api)
+    [pedido] = _com_catalogo(api).pedidos_do_cliente(TELEFONE).pedidos
+
+    assert pedido.itens == (("botijão de gás", 3),)
+    assert "3x botijão de gás" in pedido.texto_para_cliente()
+
+
+def test_06_produto_fora_do_catalogo_usa_o_id():
+    api = nova_api()
+    _sem_descricao(api, product_id=999)
+    [pedido] = _com_catalogo(api).pedidos_do_cliente(TELEFONE).pedidos
+
+    assert pedido.itens == (("produto 999", 3),)
+
+
+def test_06_api_de_teste_devolve_a_descricao_do_produto():
+    api = nova_api()
+    api.descricoes[26717] = "botijão de gás"
+    venda = api.semear_venda({"customer_id": 77, "channel": "WHATSAPP",
+                              "products": [{"product_id": 26717, "quantity": 1, "value": 110.0}]})
+
+    assert venda["products"][0]["product_description"] == "botijão de gás"
+
+
+@pytest.mark.parametrize("pagamentos, formas", [
+    ([{"payment_type": "PIX", "value": 330.0}], ("PIX",)),
+    ([{"payment_type": "MONEY", "value": 330.0}], ("MONEY",)),
+    (None, None),  # sem payments: forma desconhecida
+])
+def test_07_pedido_traz_as_formas_de_pagamento(pagamentos, formas):
+    api = nova_api()
+    _sem_descricao(api, pagamentos=pagamentos)
+    [pedido] = _com_catalogo(api).pedidos_do_cliente(TELEFONE).pedidos
+
+    assert pedido.pagamentos == formas

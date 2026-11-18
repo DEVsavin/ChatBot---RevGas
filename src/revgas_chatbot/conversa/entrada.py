@@ -159,7 +159,13 @@ def pergunta_ou_nao_sei(texto: str) -> bool:
     return any(mensagem == p or mensagem.startswith(p + " ") for p in _DUVIDA)
 
 
-_SEM_NUMERO = frozenset({"s/n", "sn", "s n", "sem numero"})
+_SEM_NUMERO = frozenset({"s/n", "sn", "s n", "sem numero", "n", "s.n", "s.n.", "s n.", "sem n"})  # ticket 02
+
+
+def fala_de_apartamento(texto: str) -> bool:
+    """"ap409", "apto 12", "bloco b": o apartamento ou bloco vai no complemento."""
+    mensagem = normalizar(texto)
+    return bool(re.match(r"(ap|apt|apto|apartamento|bloco|bl|bloc)\b|(ap|apt|apto)\d", mensagem))
 _NUMERO = re.compile(r"(\d{1,6}) ?([a-z])?", re.ASCII)
 
 
@@ -235,3 +241,69 @@ def pedido_de_devolucao(texto: str) -> PedidoDeDevolucao | None:
     if _contem(mensagem, _DEVOLUCAO_GENERICA):
         return PedidoDeDevolucao(None)
     return None
+
+
+# Ticket 01 (achados de 18/11): sem IA, a resposta à rua às vezes é o endereço inteiro.
+# I1 da revisão: sem vírgula, só palavras de pagamento marcam o endereço inteiro;
+# "bairro"/"cidade"/"cep" só contam junto com um número ("Rua Cidade Nova" é rua).
+_PAGAMENTO_NO_TEXTO = ("pagar", "pagamento", "pago", "pix", "credito", "debito", "cartao", "dinheiro")
+_LUGAR_NO_TEXTO = ("bairro", "cidade", "cep")
+_PREPOSICOES_DA_RUA = ("fica na ", "fica no ", "e na ", "e no ", "na ", "no ", "em ")
+
+
+def rua_do_texto(texto: str) -> tuple[bool, str | None]:
+    """(a resposta parece mais que a rua?, o trecho que dá para usar como rua com segurança).
+
+    Parece mais que a rua: tem vírgula, palavras de pagamento ("pagar", "pix"...) ou
+    "bairro"/"cidade" junto com um número.
+    Trecho seguro: o que vem antes da 1ª vírgula, sem "na"/"no", sem essas
+    palavras e sem terminar em número (senão, None: o chatbot pede só a rua).
+    """
+    mensagem = normalizar(texto)
+    lugar_com_numero = _contem(mensagem, _LUGAR_NO_TEXTO) and bool(re.search(r"\d", mensagem))
+    if "," not in texto and not _contem(mensagem, _PAGAMENTO_NO_TEXTO) and not lugar_com_numero:
+        return False, None
+    trecho = " ".join(texto.split(",")[0].split())
+    for preposicao in _PREPOSICOES_DA_RUA:
+        if normalizar(trecho).startswith(preposicao.strip() + " "):
+            trecho = trecho[len(preposicao):].strip()
+            break
+    if (
+        len(trecho) < 3
+        or _contem(normalizar(trecho), _PAGAMENTO_NO_TEXTO)
+        or re.match(r"(bairro|cidade|cep)\b", normalizar(trecho))
+        or (_contem(normalizar(trecho), _LUGAR_NO_TEXTO) and re.search(r"\d", trecho))
+        or re.search(r"\d\s*$", trecho)
+        or _tem_digito_nao_ascii(trecho)
+    ):
+        return True, None
+    return True, trecho
+
+
+# Ticket 03 (achados de 18/11): "4 botijoes na rua teste…" → 4.
+_POR_EXTENSO = {
+    "um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5,
+    "seis": 6, "sete": 7, "oito": 8, "nove": 9, "dez": 10,
+}
+
+
+def quantidade_do_texto(texto: str) -> int | None:
+    """O número de unidades que a frase pede (sem conferir o limite), ou None.
+
+    Ordem: a mensagem só com o número; o número no começo da frase; "N botijões";
+    um número por extenso; o único número da frase.
+    """
+    if _tem_digito_nao_ascii(texto):
+        return None
+    mensagem = normalizar(texto)
+    if mensagem.isdigit():
+        return int(mensagem)
+    for padrao in (r"(\d{1,3})\b", r".*?\b(\d{1,3})\s*botij"):
+        encontrado = re.match(padrao, mensagem)
+        if encontrado:
+            return int(encontrado.group(1))
+    extenso = [_POR_EXTENSO[p] for p in re.findall(r"[a-z]+", mensagem) if p in _POR_EXTENSO]
+    if len(extenso) == 1:
+        return extenso[0]
+    numeros = re.findall(r"\d+", mensagem)
+    return int(numeros[0]) if len(numeros) == 1 else None

@@ -277,7 +277,7 @@ def test_oi_recebe_a_saudacao_no_mesmo_chat(tmp_path):
 
 def test_pedido_completo_pelo_waha(tmp_path):
     waha = WahaSimulado(tmp_path)
-    respostas = waha.conversa("oi", "sim", "1", "2", "sim", "1", "1")
+    respostas = waha.conversa("oi", "sim", "2", "sim", "1", "1")
     waha.atendimento.desligar()
 
     assert respostas[-1].startswith("Pedido registrado!")
@@ -407,7 +407,7 @@ def test_com_atender_todos_a_ia_continua_so_para_a_equipe(tmp_path):
                          atende=lambda n: True, relogio=api.relogio)  # "todos"
     http = TestClient(app, base_url=BASE)
     atendimento.ligar()
-    for texto in ("oi", "sim", "Fulano", "quero 2 botijões, por favor"):
+    for texto in ("oi", "sim", "Fulano", "manda o de sempre, por favor"):
         postar(http, evento(texto, de=f"{OUTRO}@c.us"))
         atendimento.esperar()
     atendimento.desligar()
@@ -421,7 +421,7 @@ def test_com_atender_todos_a_ia_continua_so_para_a_equipe(tmp_path):
 
 def test_cancelamento_pelo_waha_com_resumo_confirmacao_e_fila(tmp_path):
     waha = WahaSimulado(tmp_path)
-    respostas = waha.conversa("oi", "sim", "1", "2", "sim", "1", "1")  # um pedido registrado
+    respostas = waha.conversa("oi", "sim", "2", "sim", "1", "1")  # um pedido registrado
     assert respostas[-1].startswith("Pedido registrado!")
     operacoes_antes = len(waha.api.operacoes)
 

@@ -79,7 +79,7 @@ def test_primeira_mensagem_cumprimenta_e_confirma_o_numero(wa):
 
 
 def test_pedido_completo_pelo_whatsapp(wa):
-    respostas = wa.conversa("oi", "sim", "1", "2", "sim", "1", "1")
+    respostas = wa.conversa("oi", "sim", "2", "sim", "1", "1")
 
     assert respostas[-1].startswith("Pedido registrado!")
     assert len(wa.api.vendas_criadas()) == 1
@@ -161,19 +161,19 @@ def test_primeira_mensagem_pedindo_atendente_transfere(wa):
 
 @pytest.mark.parametrize("numero", [EQUIPE, EQUIPE_SEM_9])
 def test_numero_da_equipe_usa_a_ia(tmp_path, numero):
-    ia = InterpretadorFalso({"quero 2 botijões": Interpretacao(intencao="PEDIR", produto="botijão de gás",
+    ia = InterpretadorFalso({"manda o de sempre": Interpretacao(intencao="PEDIR", produto="botijão de gás",
                                                                quantidade=2)})
     wa = WhatsAppSimulado(tmp_path, ia=ia)
-    wa.conversa("oi", "sim", "Fulano", "quero 2 botijões", de=numero)
+    wa.conversa("oi", "sim", "Fulano", "manda o de sempre", de=numero)
     wa.atendimento.desligar()
 
-    assert "quero 2 botijões" in [t for t, _ in ia.recebidos]
+    assert "manda o de sempre" in [t for t, _ in ia.recebidos]
 
 
 def test_numero_fora_da_equipe_nunca_usa_a_ia(tmp_path):
     ia = InterpretadorFalso()
     wa = WhatsAppSimulado(tmp_path, ia=ia)
-    wa.conversa("oi", "sim", "Fulano", "quero 2 botijões, por favor", de=OUTRO)
+    wa.conversa("oi", "sim", "Fulano", "manda o de sempre, por favor", de=OUTRO)
     wa.atendimento.desligar()
 
     assert ia.recebidos == []
@@ -182,7 +182,7 @@ def test_numero_fora_da_equipe_nunca_usa_a_ia(tmp_path):
 def test_equipe_que_troca_para_outro_numero_perde_a_ia(tmp_path):
     ia = InterpretadorFalso()
     wa = WhatsAppSimulado(tmp_path, ia=ia)
-    wa.conversa("oi", "não", "(86) 98888-0000", "sim", "Fulano", "quero 2 botijões, por favor", de=EQUIPE)
+    wa.conversa("oi", "não", "(86) 98888-0000", "sim", "Fulano", "manda o de sempre, por favor", de=EQUIPE)
     wa.atendimento.desligar()
 
     assert ia.recebidos == []
@@ -243,7 +243,7 @@ def test_modo_real_pelo_whatsapp_nao_busca_cadastro_e_usa_o_cliente_fixo(tmp_pat
                       venda_real=ConfigVendaReal(url="https://api.exemplo.test/v1", chave="k", cliente_demo=5700355))
     wa = WhatsAppSimulado(tmp_path, criar_conversa=lambda tel: programa(tel, numero_confiavel=True))
     wa.api = api
-    respostas = wa.conversa("oi", "sim", "Fulano", "1", "1", "Rua Inventada", "10", "Centro", "Teresina", "PI",
+    respostas = wa.conversa("oi", "sim", "Fulano", "1", "Rua Inventada", "10", "Centro", "Teresina", "PI",
                             "pular", "pular", "1", "1", de=EQUIPE)
     wa.atendimento.desligar()
 

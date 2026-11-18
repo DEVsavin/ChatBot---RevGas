@@ -22,7 +22,10 @@ from revgas_chatbot.vendas.registro import RegistradorDeVendas
 
 AGORA = datetime(2026, 11, 18, 15, 0, tzinfo=FUSO_TERESINA)
 TELEFONE = "5500900000001"
-CATALOGO = {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
+CATALOGO = {
+    26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00")),
+    26255: ProdutoCatalogo(nome="água 20 L", preco=Decimal("15.00")),  # 2 produtos: a lista aparece (ticket 04)
+}
 PAGAMENTOS = {"PIX", "MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO"}
 MARIA = {
     "id": 77, "name": "Maria Exemplo", "phones": [TELEFONE], "location": "Rua Exemplo",
@@ -38,12 +41,12 @@ def api():
     return api
 
 
-def semear(api, *, dias_atras=1, quantidade=2, status=None, cliente=77):
+def semear(api, *, dias_atras=1, quantidade=2, status=None, cliente=77, pagamento="PIX"):
     venda = api.semear_venda(
         {"establishment_id": 2580, "customer_id": cliente, "channel": "WHATSAPP",
          "products": [{"product_id": 26717, "quantity": quantidade, "value": 110.0,
                        "product_description": "botijão de gás"}],
-         "payments": [{"payment_type": "PIX", "value": 110.0 * quantidade}]},
+         **({"payments": [{"payment_type": pagamento, "value": 110.0 * quantidade}]} if pagamento else {})},
         criada_em=AGORA - timedelta(days=dias_atras),
     )
     if status:
@@ -323,10 +326,11 @@ def test_nao_achei_meu_pedido_segue_sem_pedido(conversa, api, fila):
 
 
 def test_pedido_cancelado_vira_estorno(conversa, api, fila):
-    semear(api, status="CANCEL")
+    semear(api, status="CANCEL")  # pago no PIX
     resposta = falar(conversa, "quero cancelar", "1")
 
-    assert "já está cancelado" in resposta and "você prefere" in resposta
+    assert "já está cancelado" in resposta and "Você já pagou" in resposta  # ticket 07: PIX pergunta
+    assert "você prefere" in "\n".join(conversa.responder("sim"))
     conversa.responder("2")
     conversa.responder("1")
     [s] = abertas(fila)
@@ -430,3 +434,145 @@ def test_modo_real_lista_o_cliente_fixo(dependencias, api, fila):
 
     assert f"1) Pedido {venda}" in resposta
     assert "buscar_clientes" not in api.operacoes
+
+
+
+# --- Ticket 07 (Q5): "Você já pagou?" só no PIX ----------------------------------------------
+
+
+@pytest.mark.parametrize("pagamento", ["MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO"])
+def test_07_pago_na_entrega_nao_pergunta_e_segue_sem_preferencia(conversa, api, fila, pagamento):
+    semear(api, pagamento=pagamento)
+    resposta = falar(conversa, "quero cancelar", "1", "1")  # pedido, desisti
+
+    assert "Você já pagou" not in resposta and "Confirma?" in resposta
+    conversa.responder("1")
+    [s] = abertas(fila)
+    assert s.dados["preferencia"] is None
+
+
+@pytest.mark.parametrize("pagamento", ["PIX", None])
+def test_07_pix_ou_forma_desconhecida_pergunta(conversa, api, pagamento):
+    semear(api, pagamento=pagamento)
+
+    assert "Você já pagou" in falar(conversa, "quero cancelar", "1", "1")
+
+
+def test_07_cancelado_pago_na_entrega_nao_tem_valor_a_devolver(conversa, api, fila):
+    semear(api, status="CANCEL", pagamento="MONEY")
+    resposta = falar(conversa, "quero cancelar", "1")
+
+    assert "já está cancelado" in resposta and "não há valor a devolver" in resposta
+    assert "você prefere" not in resposta
+    assert abertas(fila) == []
+
+
+def test_07_cancelado_no_pix_sem_pagar_nao_registra(conversa, api, fila):
+    semear(api, status="CANCEL")
+    falar(conversa, "quero cancelar", "1")
+
+    assert "não há valor a devolver" in "\n".join(conversa.responder("não"))
+    assert abertas(fila) == []
+
+
+def test_06_lista_da_devolucao_com_o_nome_do_produto(dependencias, api):
+    api.semear_venda({"establishment_id": 2580, "customer_id": 77, "channel": "WHATSAPP",
+                      "products": [{"product_id": 26717, "quantity": 3, "value": 110.0}],
+                      "payments": [{"payment_type": "PIX", "value": 330.0}]},
+                     criada_em=AGORA - timedelta(days=1))
+    conversa = Conversa(TELEFONE, replace(dependencias, devolucao=Devolucao(
+        api=dependencias.api, relogio=api.relogio, fila=dependencias.fila, catalogo=CATALOGO)))
+
+    assert "3x botijão de gás" in falar(conversa, "quero cancelar")
+
+
+# --- Ticket 08 (Q1): depois do pedido, a IA pode abrir o cancelamento ------------------------
+
+ATE_O_PEDIDO = ("sim", "1", "2", "sim", "1", "1")  # catálogo de teste com 2 produtos: "1" = botijão
+
+
+def test_08_ia_abre_o_cancelamento_no_pos_venda(conversa, ia, api):
+    falar(conversa, *ATE_O_PEDIDO)
+    ia.respostas["quero cancelaar"] = Interpretacao(intencao="CANCELAR_OU_DEVOLVER")
+    resposta = "\n".join(conversa.responder("quero cancelaar"))
+
+    assert "Qual pedido?" in resposta
+
+
+def test_08_ia_com_outra_frase_mostra_o_menu(conversa, ia):
+    falar(conversa, *ATE_O_PEDIDO)
+    ia.respostas["me arrependi daquilo"] = Interpretacao(intencao="CANCELAR_OU_DEVOLVER")
+
+    assert "1) cancelar um pedido" in "\n".join(conversa.responder("me arrependi daquilo"))
+
+
+def test_08_nao_no_resumo_da_devolucao_nao_registra(conversa, ia, fila):
+    falar(conversa, *ATE_O_PEDIDO)
+    ia.respostas["quero cancelaar"] = Interpretacao(intencao="CANCELAR_OU_DEVOLVER")
+    for r in ("quero cancelaar", "1", "1", "não"):
+        conversa.responder(r)
+
+    assert "nada foi registrado" in "\n".join(conversa.responder("2")).lower()
+    assert abertas(fila) == []
+
+
+@pytest.mark.parametrize("intencao", ["ATENDENTE", "SAIR"])
+def test_08_atendente_ou_sair_vindos_da_ia_continuam_ignorados(conversa, ia, fila, intencao):
+    falar(conversa, *ATE_O_PEDIDO)
+    ia.respostas["me ajuda aí"] = Interpretacao(intencao=intencao)
+    resposta = "\n".join(conversa.responder("me ajuda aí"))
+
+    assert "já foi registrado" in resposta
+    assert abertas(fila) == [] and not conversa.encerrada
+
+
+def test_08_sem_ia_a_palavra_exata_continua_valendo(dependencias):
+    conversa = Conversa(TELEFONE, replace(dependencias, interpretador=None))
+    falar(conversa, *ATE_O_PEDIDO)
+
+    assert "Qual pedido?" in "\n".join(conversa.responder("cancelar"))
+
+
+# --- Ticket 09 (Q2): pós-venda ensina "cancelar"; atendente leva o contexto ------------------
+
+ENSINA = "Para cancelar, escreva cancelar. Para outra coisa, escreva atendente."
+
+
+def test_09_as_duas_mensagens_do_pos_venda_ensinam_cancelar(conversa):
+    registrado = falar(conversa, *ATE_O_PEDIDO)
+    assert registrado.startswith("Pedido registrado!") and ENSINA in registrado
+    assert ENSINA in "\n".join(conversa.responder("3"))
+
+
+def test_09_atendente_depois_do_pedido_leva_o_numero_do_pedido(conversa, api, fila):
+    falar(conversa, *ATE_O_PEDIDO)
+    [venda] = api.vendas_criadas()
+    conversa.responder("atendente")
+
+    [s] = abertas(fila)
+    assert s.tipo == "ATENDIMENTO" and f"Último pedido: {venda['id']}." in s.resumo
+
+
+def test_09_atendente_depois_de_tentar_cancelar_leva_isso(conversa, api, fila):
+    falar(conversa, *ATE_O_PEDIDO)
+    [venda] = api.vendas_criadas()
+    conversa.responder("quero cancelar")
+    conversa.responder("1")
+    conversa.responder("atendente")
+
+    [s] = abertas(fila)
+    assert f"Tentou cancelar o pedido {venda['id']}." in s.resumo
+
+
+def test_09_atendente_depois_de_travar_leva_a_pergunta(conversa, fila):
+    falar(conversa, "sim", "1", "abc", "abc", "atendente")
+
+    [s] = abertas(fila)
+    assert "Travou na pergunta: Quantos?" in s.resumo
+
+
+def test_09_sem_contexto_o_resumo_e_o_de_hoje(conversa, fila):
+    falar(conversa, "atendente")
+
+    [s] = abertas(fila)
+    assert s.resumo == "Cliente pediu atendente."

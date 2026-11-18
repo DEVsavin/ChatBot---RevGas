@@ -178,6 +178,9 @@ def montar(
     cadenciada = ApiCadenciada(api, relogio)  # a única do programa
     catalogo = carregar_catalogo(pasta_config / "catalogo.json")
     pagamentos = carregar_pagamentos(pasta_config / "pagamentos.json")
+    if isinstance(api, ApiRevGasFalsa) and not api.descricoes:
+        # Ticket 06: a API de teste devolve o nome do produto nas vendas, como a real.
+        api.descricoes.update({pid: produto.nome for pid, produto in catalogo.items()})
     fila = FilaDeAtendimento(Path(pasta_dados), relogio)
     dependencias = Dependencias(
         api=cadenciada,
@@ -203,6 +206,7 @@ def montar(
             relogio=relogio,
             fila=fila,
             cliente_fixo=venda_real.cliente_demo if venda_real else None,
+            catalogo=catalogo,  # ticket 06: nome do produto na lista
         ),
     )
     return Programa(
