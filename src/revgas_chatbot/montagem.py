@@ -68,6 +68,10 @@ AVISO_VENDA_REAL = (
     "VENDA REAL LIGADA: cada pedido confirmado cria uma venda no estabelecimento "
     f"{ESTABELECIMENTO} (cliente de demonstração, sem avisar entregadores)."
 )
+AVISO_ENTREGADORES = (
+    "ATENÇÃO: cada pedido confirmado AVISA os entregadores do estabelecimento "
+    f"{ESTABELECIMENTO} (broadcast NEW_SALE)."
+)
 MAX_EQUIPE = 5  # números da equipe que usam a IA (W2)
 
 
@@ -82,6 +86,7 @@ class ConfigVendaReal:
     url: str
     chave: str = field(repr=False)
     cliente_demo: int  # REVGAS_CLIENTE_DEMO: o cliente fixo enquanto /customers der 403
+    avisar_entregadores: bool = False  # --avisar-entregadores: broadcast NEW_SALE (pedido de 18/11)
 
 
 def config_venda_real(ambiente: Mapping[str, str]) -> ConfigVendaReal:
@@ -136,6 +141,7 @@ class Programa:
     ia_ligada: bool
     venda_real: bool = False
     ia_permitida: Callable[[str], bool] = numero_ficticio
+    avisar_entregadores: bool = False
 
     def __call__(self, telefone: str, *, numero_confiavel: bool = True, com_ia: bool = True) -> Conversa:
         """`com_ia=False` cria a conversa sem a IA (H2: número real na web).
@@ -190,7 +196,12 @@ def montar(
             catalogo=catalogo,
             pagamentos_permitidos=pagamentos,
             establishment_id=ESTABELECIMENTO,
-            venda_real=VendaReal(cliente_fixo=venda_real.cliente_demo) if venda_real else None,
+            venda_real=VendaReal(
+                cliente_fixo=venda_real.cliente_demo,
+                broadcast="NEW_SALE" if venda_real.avisar_entregadores else "NONE",
+            )
+            if venda_real
+            else None,
         ),
         fila=fila,
         catalogo=catalogo,
@@ -214,13 +225,29 @@ def montar(
         ia_ligada=interpretador is not None,
         venda_real=venda_real is not None,
         ia_permitida=ia_permitida,
+        avisar_entregadores=bool(venda_real and venda_real.avisar_entregadores),
     )
 
 
-def montar_do_ambiente(pasta_dados: Path, ambiente: Mapping[str, str], *, venda_real: bool) -> Programa:
+def confirmar_aviso(ler: Callable[[str], str], escrever: Callable[[str], None], digitado: str | None = None) -> None:
+    """--avisar-entregadores: mostra o aviso e só segue se a pessoa digitar AVISAR."""
+    escrever(f"*** {AVISO_ENTREGADORES} ***")
+    if digitado is None:
+        digitado = ler("Para confirmar, digite AVISAR: ")
+    if (digitado or "").strip() != "AVISAR":
+        raise ConfiguracaoInvalida("confirmação não recebida: digite AVISAR para ligar o aviso aos entregadores")
+
+
+def montar_do_ambiente(
+    pasta_dados: Path, ambiente: Mapping[str, str], *, venda_real: bool, avisar_entregadores: bool = False
+) -> Programa:
     """Montagem dos comandos: lê a equipe (opcional) e, com `--venda-real`, a configuração real."""
+    if avisar_entregadores and not venda_real:
+        raise ConfiguracaoInvalida("--avisar-entregadores só funciona junto com --venda-real")
     regra = regra_da_ia(numeros_da_equipe(ambiente))
     config = config_venda_real(ambiente) if venda_real else None
+    if config is not None and avisar_entregadores:
+        config = replace(config, avisar_entregadores=True)
     return montar(pasta_dados, ambiente=ambiente, ia_permitida=regra, venda_real=config)
 
 

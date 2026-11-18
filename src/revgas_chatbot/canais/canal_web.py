@@ -30,7 +30,14 @@ from pydantic import BaseModel
 
 from revgas_chatbot.conversa.conversa import Conversa
 from revgas_chatbot.conversa.entrada import numero_ficticio, telefone
-from revgas_chatbot.montagem import AVISO_VENDA_REAL, ConfiguracaoInvalida, Programa, montar_do_ambiente
+from revgas_chatbot.montagem import (
+    AVISO_ENTREGADORES,
+    AVISO_VENDA_REAL,
+    ConfiguracaoInvalida,
+    Programa,
+    confirmar_aviso,
+    montar_do_ambiente,
+)
 
 PORTA = 8000  # W-D1
 MAX_MENSAGEM = 500  # W-D2
@@ -97,6 +104,8 @@ def criar_app(programa: Programa, *, porta: int = PORTA, pasta_dados: Path = Pat
         sessao = secrets.token_urlsafe(24)  # 192 bits aleatórios: não dá para adivinhar
         sessoes[sessao] = conversa
         avisos = [AVISO_VENDA_REAL] if programa.venda_real else []
+        if programa.avisar_entregadores:
+            avisos.append(AVISO_ENTREGADORES)
         if programa.ia_ligada and not com_ia:
             avisos.append(AVISO_SEM_IA)
         return {
@@ -126,12 +135,15 @@ def main(
     rodar: Callable[..., None] | None = None,  # testes: um falso no lugar do uvicorn
     pasta_dados: Path = Path("dados"),
     ambiente: Mapping[str, str] | None = None,
+    ler: Callable[[str], str] = input,  # testes: a resposta ao "digite AVISAR"
 ) -> None:
     """Liga o chat web em http://127.0.0.1:<porta> (só nesta máquina)."""
     parser = argparse.ArgumentParser(description="Chat web de teste (só nesta máquina)")
     parser.add_argument("--porta", type=int, default=PORTA, help=f"porta (padrão {PORTA})")
     parser.add_argument("--venda-real", action="store_true",
                         help="cria vendas DE VERDADE no estabelecimento 2580 (só o usuário liga; M5)")
+    parser.add_argument("--avisar-entregadores", action="store_true",
+                        help="só com --venda-real: AVISA os entregadores (broadcast NEW_SALE); pede AVISAR")
     argumentos = parser.parse_args(argv)
 
     if rodar is None:
@@ -142,7 +154,10 @@ def main(
 
     ambiente = os.environ if ambiente is None else ambiente
     try:
-        programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real)
+        programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real,
+                                      avisar_entregadores=argumentos.avisar_entregadores)
+        if programa.avisar_entregadores:
+            confirmar_aviso(ler, lambda t: print(t, flush=True))
     except ConfiguracaoInvalida as erro:
         raise SystemExit(f"Chat web não iniciou: {erro}") from None
     app = criar_app(programa, porta=argumentos.porta, pasta_dados=pasta_dados)

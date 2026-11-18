@@ -327,6 +327,7 @@ uv run --env-file .env python -m revgas_chatbot.canais.canal_web --venda-real
 - Precisa de `REVGAS_API_KEY`, `REVGAS_API_URL` e `REVGAS_CLIENTE_DEMO` no `.env`; sem eles, o programa não inicia.
 - Toda venda usa o cliente de demonstração de `REVGAS_CLIENTE_DEMO`, porque a chave atual ainda não tem acesso à busca de clientes da API.
 - As vendas são criadas **sem avisar os entregadores**.
+- `--avisar-entregadores` (só junto com `--venda-real`) faz cada venda **avisar os entregadores de verdade** do estabelecimento (broadcast `NEW_SALE`). O programa pede para digitar `AVISAR` antes de ligar. Use só com autorização (professor ou RevGás).
 - A API limita a 1 requisição por segundo; o chatbot respeita esse limite.
 
 Para cancelar as vendas abertas da demonstração depois de um teste (o script pede confirmação a cada uma):

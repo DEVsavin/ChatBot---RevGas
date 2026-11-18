@@ -2,6 +2,7 @@
 # Liga o WhatsApp pelo chip (WAHA) com um comando:
 #   ./scripts/whatsapp-waha.sh              (venda na API de teste)
 #   ./scripts/whatsapp-waha.sh --venda-real (venda de verdade; só o usuário liga)
+#   ./scripts/whatsapp-waha.sh --venda-real --avisar-entregadores (também avisa os entregadores; pede AVISAR)
 #
 # 1. sobe o WAHA no Docker (só em 127.0.0.1:3000);
 # 2. liga o chatbot (só em 127.0.0.1:8002);
@@ -21,12 +22,23 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# --avisar-entregadores: a confirmação é pedida aqui, porque o chatbot roda em segundo plano
+# e não consegue ler o teclado. O que for digitado vai para ele, que confere se é AVISAR.
+ARGS=("$@")
+for arg in "$@"; do
+  if [ "$arg" = "--avisar-entregadores" ]; then
+    echo "ATENÇÃO: com --avisar-entregadores, cada pedido confirmado AVISA os entregadores do estabelecimento 2580."
+    read -r -p "Para confirmar, digite AVISAR: " CONFIRMACAO
+    ARGS+=("--confirmar-aviso" "$CONFIRMACAO")
+  fi
+done
+
 echo "1/3 Subindo o WAHA no Docker..."
 mkdir -p dados/waha-sessoes
 "${COMPOSE[@]}" up -d
 
 echo "2/3 Ligando o chatbot..."
-uv run --env-file .env python -m revgas_chatbot.canais.canal_waha "$@" &
+uv run --env-file .env python -m revgas_chatbot.canais.canal_waha "${ARGS[@]}" &
 CHATBOT=$!
 trap 'kill "$CHATBOT" 2>/dev/null || true' EXIT INT TERM
 for _ in $(seq 1 40); do

@@ -434,3 +434,31 @@ def test_cancelamento_pelo_waha_com_resumo_confirmacao_e_fila(tmp_path):
     novas = waha.api.operacoes[operacoes_antes:]
     assert set(novas) <= {"buscar_clientes", "buscar_vendas"}  # a devolução só leu o ERP
     assert "CANCELAMENTO" in (tmp_path / "fila.html").read_text(encoding="utf-8")
+
+
+# --- Avisar os entregadores (pedido de 18/11) ------------------------------------------------
+
+AMBIENTE_AVISO = {**AMBIENTE, "REVGAS_API_KEY": "k", "REVGAS_API_URL": "https://api.exemplo.test/v1",
+                  "REVGAS_CLIENTE_DEMO": "5700355"}
+
+
+def test_waha_avisar_com_confirmacao_do_script_inicia(tmp_path, capsys):
+    chamadas = []
+    main(["--venda-real", "--avisar-entregadores", "--confirmar-aviso", "AVISAR"],
+         rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path, ambiente=AMBIENTE_AVISO)
+
+    assert len(chamadas) == 1 and "AVISA os entregadores" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv, ambiente, motivo", [
+    (["--avisar-entregadores", "--confirmar-aviso", "AVISAR"], AMBIENTE_AVISO, "--venda-real"),
+    (["--venda-real", "--avisar-entregadores", "--confirmar-aviso", "nao"], AMBIENTE_AVISO, "AVISAR"),
+    (["--venda-real", "--avisar-entregadores", "--confirmar-aviso", "AVISAR"],
+     {**AMBIENTE_AVISO, "WAHA_ATENDER": "todos"}, "WAHA_ATENDER=equipe"),
+])
+def test_waha_avisar_sem_as_condicoes_nao_inicia(tmp_path, argv, ambiente, motivo):
+    chamadas = []
+    with pytest.raises(SystemExit) as erro:
+        main(argv, rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path, ambiente=ambiente)
+
+    assert chamadas == [] and motivo in str(erro.value)

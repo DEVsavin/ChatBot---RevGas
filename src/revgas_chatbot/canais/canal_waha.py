@@ -36,6 +36,7 @@ from revgas_chatbot.conversa.entrada import telefone
 from revgas_chatbot.montagem import (
     AVISO_VENDA_REAL,
     ConfiguracaoInvalida,
+    confirmar_aviso,
     montar_do_ambiente,
     numeros_da_equipe,
     regra_da_ia,
@@ -205,6 +206,10 @@ def main(
     parser.add_argument("--porta", type=int, default=PORTA, help=f"porta (padrão {PORTA})")
     parser.add_argument("--venda-real", action="store_true",
                         help="cria vendas DE VERDADE no estabelecimento 2580 (só o usuário liga; M5)")
+    parser.add_argument("--avisar-entregadores", action="store_true",
+                        help="só com --venda-real: AVISA os entregadores (broadcast NEW_SALE); pede AVISAR")
+    parser.add_argument("--confirmar-aviso", metavar="TEXTO",
+                        help="o que a pessoa digitou no script (o chatbot roda em segundo plano)")
     argumentos = parser.parse_args(argv)
 
     ambiente = os.environ if ambiente is None else ambiente
@@ -214,7 +219,10 @@ def main(
             # I2: com "todos", qualquer contato do chip criaria venda real.
             raise ConfiguracaoInvalida("--venda-real só funciona com WAHA_ATENDER=equipe")
         # I3: a IA continua só para fictícios e equipe, qualquer que seja WAHA_ATENDER.
-        programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real)
+        programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real,
+                                      avisar_entregadores=argumentos.avisar_entregadores)
+        if programa.avisar_entregadores:
+            confirmar_aviso(input, lambda t: print(t, flush=True), argumentos.confirmar_aviso)
     except ConfiguracaoInvalida as erro:
         raise SystemExit(f"WAHA não iniciou: {erro}") from None
     if rodar is None:

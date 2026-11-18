@@ -6,6 +6,7 @@ falsa. Dados fictícios (DDD 00) e um número "real" inventado só para o teste.
 """
 
 import threading
+from dataclasses import replace
 import time
 from datetime import datetime
 
@@ -362,3 +363,58 @@ def test_06_cancelamento_no_chat_web_mostra_o_nome_do_produto(cliente):
         enviar(cliente, sessao, texto)
 
     assert "3x botijão de gás" in enviar(cliente, sessao, "quero cancelar")
+
+
+# --- Avisar os entregadores (pedido de 18/11): só com --venda-real e digitando AVISAR ------
+
+
+def test_venda_real_com_aviso_manda_new_sale(tmp_path, api):
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={},
+                      venda_real=replace(CONFIG_REAL, avisar_entregadores=True))
+    cliente = TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
+    inicio = iniciar(cliente)
+    assert "AVISA os entregadores" in inicio["aviso"]
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1"):
+        enviar(cliente, inicio["sessao"], texto)
+    enviar(cliente, inicio["sessao"], "1")
+
+    [venda] = api.vendas_criadas()
+    assert venda["broadcast"] == "NEW_SALE"
+    assert "deliverer_id" not in venda
+
+
+def test_venda_real_sem_a_opcao_continua_none(real, api):
+    sessao = iniciar(real)["sessao"]
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "PI", "pular", "pular", "1", "1"):
+        enviar(real, sessao, texto)
+
+    assert api.vendas_criadas()[0]["broadcast"] == "NONE"
+
+
+def test_avisar_sem_venda_real_nao_inicia(tmp_path):
+    chamadas = []
+    with pytest.raises(SystemExit) as erro:
+        main(["--avisar-entregadores"], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path,
+             ambiente=AMBIENTE_REAL, ler=lambda t: "AVISAR")
+
+    assert chamadas == [] and "--venda-real" in str(erro.value)
+
+
+@pytest.mark.parametrize("digitado", ["", "não", "avisar", "sim"])
+def test_avisar_sem_digitar_avisar_nao_inicia(tmp_path, digitado):
+    chamadas = []
+    with pytest.raises(SystemExit) as erro:
+        main(["--venda-real", "--avisar-entregadores"], rodar=lambda app, **o: chamadas.append(o),
+             pasta_dados=tmp_path, ambiente=AMBIENTE_REAL, ler=lambda t: digitado)
+
+    assert chamadas == [] and "AVISAR" in str(erro.value)
+
+
+def test_avisar_digitando_avisar_inicia_com_o_aviso(tmp_path, capsys):
+    perguntas, chamadas = [], []
+    main(["--venda-real", "--avisar-entregadores"], rodar=lambda app, **o: chamadas.append(o), pasta_dados=tmp_path,
+         ambiente=AMBIENTE_REAL, ler=lambda t: (perguntas.append(t), " AVISAR ")[1])
+
+    assert len(chamadas) == 1
+    assert "AVISA os entregadores" in capsys.readouterr().out
+    assert "AVISAR" in perguntas[0]

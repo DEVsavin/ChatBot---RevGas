@@ -18,14 +18,17 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, TextIO
 
 from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio
 from revgas_chatbot.conversa.entrada import telefone
 from revgas_chatbot.montagem import (
+    AVISO_ENTREGADORES,
     AVISO_VENDA_REAL,
     ConfiguracaoInvalida,
+    confirmar_aviso,
     config_venda_real,
     montar,
     numeros_da_equipe,
@@ -57,10 +60,17 @@ def main(
     parser.add_argument("--telefone", help="número simulado do WhatsApp, ex.: 5500900000001")
     parser.add_argument("--venda-real", action="store_true",
                         help="cria vendas DE VERDADE no estabelecimento 2580 (só o usuário liga; M5)")
+    parser.add_argument("--avisar-entregadores", action="store_true",
+                        help="só com --venda-real: AVISA os entregadores (broadcast NEW_SALE); pede AVISAR")
     argumentos = parser.parse_args(argv)
     ambiente = os.environ if ambiente is None else ambiente
     try:
+        if argumentos.avisar_entregadores and not argumentos.venda_real:
+            raise ConfiguracaoInvalida("--avisar-entregadores só funciona junto com --venda-real")
         config = config_venda_real(ambiente) if argumentos.venda_real else None
+        if config is not None and argumentos.avisar_entregadores:
+            confirmar_aviso(lambda t: _ler(entrada, saida, t) or "", lambda t: saida.write(t + "\n"))
+            config = replace(config, avisar_entregadores=True)
         regra = regra_da_ia(numeros_da_equipe(ambiente))
     except ConfiguracaoInvalida as erro:
         raise SystemExit(f"Chat não iniciou: {erro}") from None
@@ -79,6 +89,8 @@ def main(
     saida.write("(Chat de teste. Ctrl+D para sair.)\n")
     if programa.venda_real:
         saida.write(f"*** {AVISO_VENDA_REAL} ***\n")
+    if programa.avisar_entregadores:
+        saida.write(f"*** {AVISO_ENTREGADORES} ***\n")
     if programa.ia_ligada:
         saida.write("(IA ligada: Gemini, cota grátis. Use só os clientes fictícios.)\n")
     else:

@@ -151,3 +151,22 @@ def test_terminal_venda_real_sem_configuracao_nao_inicia(tmp_path):
         rodar(["--venda-real", "--telefone", MARIA], "sim\n", tmp_path)
 
     assert "REVGAS_API_KEY" in str(erro.value)
+
+
+def test_terminal_avisar_pede_avisar_antes_do_chat(tmp_path):
+    relogio = RelogioFalso(datetime(2026, 11, 18, 15, 0, tzinfo=FUSO_TERESINA))
+    api = api_de_demonstracao(relogio)
+    saida = io.StringIO()
+    main(["--venda-real", "--avisar-entregadores", "--telefone", MARIA], io.StringIO("AVISAR\nsim\n"), saida,
+         relogio=relogio, api=api, pasta_dados=tmp_path, ambiente=AMBIENTE_REAL)
+
+    assert "AVISA os entregadores" in saida.getvalue() and "Qual é o seu nome?" in saida.getvalue()
+
+
+def test_terminal_avisar_sem_avisar_nao_inicia(tmp_path):
+    with pytest.raises(SystemExit) as erro:
+        main(["--venda-real", "--avisar-entregadores", "--telefone", MARIA], io.StringIO("sim\n"), io.StringIO(),
+             relogio=RelogioFalso(), api=api_de_demonstracao(RelogioFalso()), pasta_dados=tmp_path,
+             ambiente=AMBIENTE_REAL)
+
+    assert "AVISAR" in str(erro.value)
