@@ -250,8 +250,8 @@ Pelo chat no terminal (ou no navegador, digitando o mesmo telefone):
 
 | # | Cenário | O que digitar |
 |---|---|---|
-| 1 | **Pedido completo** (cliente cadastrado) | `--telefone 5500900000001` → `sim` → `1` (botijão) → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar) |
-| 2 | **Cliente novo com correção** | `--telefone 5500900000002` → `sim` → nome → `1` → `1` → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar) |
+| 1 | **Pedido completo** (cliente cadastrado) | `--telefone 5500900000001` → `sim` → `2` (quantidade) → `sim` (endereço do cadastro) → `1` (PIX) → `1` (confirmar) |
+| 2 | **Cliente novo com correção** | `--telefone 5500900000002` → `sim` → nome → `1` (quantidade) → rua, número, bairro, cidade, estado, `pular`, `pular` → `2` (dinheiro) → troco `200` → no resumo, `2` (corrigir) → `2` (endereço) → endereço novo → `1` (confirmar) |
 | 3 | **Transferência para a equipe** | Em qualquer momento, `quero falar com um atendente` ou `estou sentindo cheiro de gás`; a solicitação aparece em `dados/fila.html` (o vazamento como URGENTE, no topo) |
 | 4 | **Cancelamento** | Depois do cenário 1, na mesma conversa: `quero cancelar` → `1` (o pedido) → `1` (desisti) → `não` (ainda não pagou) → `1` (confirmar). Sai o protocolo `DEV-…` |
 | 5 | **Problema no produto** | Depois do cenário 1: `veio com lacre violado` → `1` (o pedido) → `1` (confirmar). A solicitação entra na fila como **ALTA** |
