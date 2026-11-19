@@ -157,8 +157,7 @@ cp .env.example .env
 uv run pytest
 ```
 
-> [!NOTE]
-> Os testes usam a API RevGás falsa e uma IA falsa: não acessam a internet e não precisam do `.env`.
+
 
 ## 💬 Formas de conversar
 
