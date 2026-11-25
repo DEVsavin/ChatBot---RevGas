@@ -2,10 +2,6 @@
 
     uv run python -m revgas_chatbot.canais.chat_terminal [--telefone 5500900000001]
 
-Para ligar a IA (Gemini, cota grátis), rode com a chave no ambiente:
-
-    uv run --env-file .env python -m revgas_chatbot.canais.chat_terminal --telefone 5500900000001
-
 Venda real (M5, só o usuário liga): acrescente `--venda-real`.
 
 O telefone simula o número que o WhatsApp entregaria. A fila de
@@ -31,8 +27,6 @@ from revgas_chatbot.montagem import (
     confirmar_aviso,
     config_venda_real,
     montar,
-    numeros_da_equipe,
-    regra_da_ia,
 )
 
 
@@ -71,7 +65,6 @@ def main(
         if config is not None and argumentos.avisar_entregadores:
             confirmar_aviso(lambda t: _ler(entrada, saida, t) or "", lambda t: saida.write(t + "\n"))
             config = replace(config, avisar_entregadores=True)
-        regra = regra_da_ia(numeros_da_equipe(ambiente))
     except ConfiguracaoInvalida as erro:
         raise SystemExit(f"Chat não iniciou: {erro}") from None
 
@@ -84,17 +77,13 @@ def main(
         if numero is None:
             saida.write("Número inválido. Use DDD e número, ex.: (00) 90000-0001.\n")
 
-    programa = montar(pasta_dados, relogio=relogio, api=api, ambiente=ambiente, venda_real=config, ia_permitida=regra)
+    programa = montar(pasta_dados, relogio=relogio, api=api, ambiente=ambiente, venda_real=config)
     conversa = programa(numero)
     saida.write("(Chat de teste. Ctrl+D para sair.)\n")
     if programa.venda_real:
         saida.write(f"*** {AVISO_VENDA_REAL} ***\n")
     if programa.avisar_entregadores:
         saida.write(f"*** {AVISO_ENTREGADORES} ***\n")
-    if programa.ia_ligada:
-        saida.write("(IA ligada: Gemini, cota grátis. Use só os clientes fictícios.)\n")
-    else:
-        saida.write("(IA desligada: sem GEMINI_API_KEY. O chat segue o roteiro.)\n")
     mensagens = conversa.iniciar()
     try:
         while True:

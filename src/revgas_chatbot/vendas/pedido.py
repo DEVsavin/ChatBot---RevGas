@@ -25,6 +25,8 @@ from revgas_chatbot.conversa.estados import nome_do_estado
 TELEFONE = re.compile(r"55\d{10,11}", re.ASCII)  # só 0-9 ASCII (I1)
 
 DINHEIRO = "MONEY"
+VALEGAS = "VALEGAS"
+MAX_SERIAL_VALEGAS = 255
 
 # Limite da observação do cliente, para a marca de reconciliação
 # (no fim da observation) não ser cortada se a API truncar o texto.
@@ -45,8 +47,9 @@ class Item:
 
 @dataclass(frozen=True)
 class Pagamento:
-    tipo: str  # payment_type da API, ex.: "PIX", "MONEY"
+    tipo: str  # payment_type da API, ex.: "PIX", "MONEY", "VALEGAS"
     valor: Decimal
+    serial: str | None = None  # número/código do vale-gás (payments[].serial)
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,7 @@ class Endereco:
     estado: str  # sigla ou nome ("PI" ou "Piauí"); a venda usa sempre o nome
     complemento: str | None = None
     referencia: str | None = None
+    quadra: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,7 @@ class Pedido:
     pagamentos: tuple[Pagamento, ...]
     troco_para: Decimal | None = None  # só com pagamento em dinheiro
     observacao: str | None = None
+    pagamento_pix: str | None = None  # "AGORA" ou "ENTREGA" (só para PIX)
 
 
 @dataclass(frozen=True)
@@ -165,6 +170,11 @@ def validar(
         if not valor_em_reais(p.valor):
             valores_ok = False
             problema("pagamentos", "o valor de cada pagamento deve ser maior que zero, com até 2 casas")
+        if p.tipo == VALEGAS:
+            if not p.serial or not p.serial.strip():
+                problema("serial", "informe o número do vale-gás")
+            elif len(p.serial.strip()) > MAX_SERIAL_VALEGAS:
+                problema("serial", f"o número do vale-gás pode ter no máximo {MAX_SERIAL_VALEGAS} caracteres")
     # Só soma se todos os valores forem números válidos (NaN quebraria a conta).
     if pedido.pagamentos and valores_ok:
         if sum((p.valor for p in pedido.pagamentos), Decimal("0")) != total:

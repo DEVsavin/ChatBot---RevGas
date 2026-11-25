@@ -1,15 +1,16 @@
 """Montagem do programa: o ÚNICO lugar que cria as peças e as liga.
 
 Cria UMA `ApiCadenciada` e entrega a mesma instância a todos os fluxos
-(conversa e registro de venda), para o limite de 1 requisição por segundo
-valer entre eles. Nenhum outro módulo deve criar `ApiCadenciada`.
+(catálogo, conversa, histórico, devolução e registro de venda), para o limite
+de 1 requisição por segundo valer entre eles. Nenhum outro módulo deve criar
+`ApiCadenciada`.
 
-No C1 a API é a falsa, com clientes de demonstração fictícios (DDD 00, que
-não existe no Brasil, então nunca é o número de uma pessoa real).
+100% integrado à API RevGás (sem banco/arquivo local e sem LLM).
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -18,20 +19,22 @@ from typing import Callable, Mapping
 from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_revgas.api_falsa import ApiRevGasFalsa
+from revgas_chatbot.api_revgas.api_http import MonitorApi
 from revgas_chatbot.config import carregar_catalogo, carregar_pagamentos
 from revgas_chatbot.conversa.conversa import Conversa, Dependencias
 from revgas_chatbot.conversa.entrada import numero_ficticio, telefone
-from revgas_chatbot.atendimento.fila import FilaDeAtendimento
 from revgas_chatbot.devolucao.devolucao import Devolucao
-from revgas_chatbot.ia.interpretacao import Interpretador
-from revgas_chatbot.ia.interpretador_gemini import InterpretadorGemini
-from revgas_chatbot.vendas.registro import RegistradorDeVendas, VendaReal
 from revgas_chatbot.relogio import RelogioDoSistema
+from revgas_chatbot.vendas.catalogo_api import carregar_catalogo_da_api
+from revgas_chatbot.vendas.historico import HistoricoDeVendas
+from revgas_chatbot.vendas.registro import RegistradorDeVendas, VendaReal
+
+_log = logging.getLogger(__name__)
 
 PASTA_CONFIG = Path(__file__).resolve().parents[2] / "config"
 ESTABELECIMENTO = 2580  # estabelecimento técnico da RevGás
 
-# Clientes de demonstração (fictícios).
+# Clientes e catálogo de demonstração (fictícios, para a API falsa).
 CLIENTES_DE_DEMONSTRACAO = [
     {
         "id": 501,
@@ -44,6 +47,20 @@ CLIENTES_DE_DEMONSTRACAO = [
         "state_federation": "Piauí",
     },
     # 5500900000002 fica sem cadastro, para mostrar o cliente novo.
+]
+PRODUTOS_DE_DEMONSTRACAO = [
+    {"id": 26717, "description": "botijão de gás", "establishment_id": ESTABELECIMENTO},
+]
+ACORDOS_DE_DEMONSTRACAO = [
+    {
+        "id": 1,
+        "product_id": 26717,
+        "establishment_id": ESTABELECIMENTO,
+        "suggested_value": "110.00",
+        "minimum_value": "100.00",
+        "is_default": True,
+        "type": "PAYMENT_TYPE",
+    },
 ]
 
 
@@ -61,6 +78,8 @@ def _orientacoes_de_seguranca(arquivo: Path) -> str:
 def api_de_demonstracao(relogio: Relogio) -> ApiRevGasFalsa:
     api = ApiRevGasFalsa(relogio=relogio)
     api.clientes.extend(dict(c) for c in CLIENTES_DE_DEMONSTRACAO)
+    api.produtos.extend(dict(p) for p in PRODUTOS_DE_DEMONSTRACAO)
+    api.acordos.extend(dict(a) for a in ACORDOS_DE_DEMONSTRACAO)
     return api
 
 
@@ -72,7 +91,7 @@ AVISO_ENTREGADORES = (
     "ATENÇÃO: cada pedido confirmado AVISA os entregadores do estabelecimento "
     f"{ESTABELECIMENTO} (broadcast NEW_SALE)."
 )
-MAX_EQUIPE = 5  # números da equipe que usam a IA (W2)
+MAX_EQUIPE = 5
 
 
 class ConfiguracaoInvalida(ValueError):
@@ -81,12 +100,12 @@ class ConfiguracaoInvalida(ValueError):
 
 @dataclass(frozen=True)
 class ConfigVendaReal:
-    """M5 (D16): venda real no 2580, ligada só com `--venda-real`."""
+    """Venda real no 2580, ligada só com `--venda-real`."""
 
     url: str
     chave: str = field(repr=False)
     cliente_demo: int  # REVGAS_CLIENTE_DEMO: o cliente fixo enquanto /customers der 403
-    avisar_entregadores: bool = False  # --avisar-entregadores: broadcast NEW_SALE (pedido de 18/11)
+    avisar_entregadores: bool = False  # --avisar-entregadores: broadcast NEW_SALE
 
 
 def config_venda_real(ambiente: Mapping[str, str]) -> ConfigVendaReal:
@@ -118,8 +137,8 @@ def _mesmo_celular(numero: str) -> str:
     return numero[:4] + numero[-8:]
 
 
-def regra_da_ia(numeros_equipe: list[str] | tuple[str, ...]) -> Callable[[str], bool]:
-    """IA permitida para números fictícios (DDD 00) ou da equipe (com ou sem o 9). W2, D17b."""
+def regra_da_equipe(numeros_equipe: list[str] | tuple[str, ...]) -> Callable[[str], bool]:
+    """Permite números fictícios (DDD 00) ou da equipe (com ou sem o 9)."""
     equipe = set()
     for bruto in numeros_equipe:
         numero = telefone(bruto)
@@ -135,59 +154,70 @@ def regra_da_ia(numeros_equipe: list[str] | tuple[str, ...]) -> Callable[[str], 
 
 @dataclass(frozen=True)
 class Programa:
-    """O programa montado: cria conversas e diz se a IA e a venda real estão ligadas."""
+    """O programa montado: cria conversas e diz se a venda real está ligada."""
 
     dependencias: Dependencias
-    ia_ligada: bool
     venda_real: bool = False
-    ia_permitida: Callable[[str], bool] = numero_ficticio
     avisar_entregadores: bool = False
+    monitor_api: MonitorApi = field(default_factory=MonitorApi)
 
-    def __call__(self, telefone: str, *, numero_confiavel: bool = True, com_ia: bool = True) -> Conversa:
-        """`com_ia=False` cria a conversa sem a IA (H2: número real na web).
-
-        Venda real: o número nunca busca cadastro (`/customers` dá 403; M5 10.3).
-        """
-        dependencias = self.dependencias if com_ia else replace(self.dependencias, interpretador=None)
-        return Conversa(telefone, dependencias, numero_confiavel=numero_confiavel and not self.venda_real)
+    def __call__(self, telefone: str, *, numero_confiavel: bool = True) -> Conversa:
+        """Venda real: o número nunca busca cadastro (`/customers` dá 403)."""
+        return Conversa(telefone, self.dependencias, numero_confiavel=numero_confiavel and not self.venda_real)
 
 
 def montar(
-    pasta_dados: Path,
+    pasta_dados: Path | None = None,
     *,
     relogio: Relogio | None = None,
     api: ApiRevGas | None = None,
     pasta_config: Path = PASTA_CONFIG,
     ambiente: Mapping[str, str] | None = None,
-    interpretador: Interpretador | None = None,  # testes: a IA falsa; senão, decide pelo ambiente
-    ia_permitida: Callable[[str], bool] = numero_ficticio,  # WhatsApp: fictício ou equipe (W2)
-    venda_real: ConfigVendaReal | None = None,  # M5: só com --venda-real
+    venda_real: ConfigVendaReal | None = None,
 ) -> Programa:
-    """Liga as peças e devolve o programa.
-
-    Configuração inválida (ex.: orientações de segurança vazias, ou a IA
-    da cota grátis com a API de verdade) impede o programa de iniciar,
-    com um erro claro.
-    """
+    """Liga as peças e devolve o programa (catálogo carregado da API RevGás, sem fila local)."""
     ambiente = os.environ if ambiente is None else ambiente
+    _ = pasta_dados
     seguranca = _orientacoes_de_seguranca(pasta_config / "seguranca.txt")
     relogio = relogio or RelogioDoSistema()
+    monitor = MonitorApi()
+    api_injetada = api is not None
     if api is None:
         if venda_real is not None:
             from revgas_chatbot.api_revgas.api_http import ApiRevGasHttp
 
-            api = ApiRevGasHttp(venda_real.url, venda_real.chave)
+            api = ApiRevGasHttp(venda_real.url, venda_real.chave, monitor=monitor)
         else:
             api = api_de_demonstracao(relogio)
-    if interpretador is None:
-        interpretador = _interpretador(ambiente, api, venda_real=venda_real is not None)
     cadenciada = ApiCadenciada(api, relogio)  # a única do programa
-    catalogo = carregar_catalogo(pasta_config / "catalogo.json")
+    catalogo = None
+    if not api_injetada and venda_real is None:
+        # Mesmo em modo de teste para vendas, se houver REVGAS_API_KEY no ambiente,
+        # carrega o catálogo REAL (somente leitura: GET /products + GET /deals).
+        chave_real = (ambiente.get("REVGAS_API_KEY") or "").strip()
+        url_real = (ambiente.get("REVGAS_API_URL") or "https://api.revgas.com/v1").strip()
+        if chave_real and url_real.startswith("https://"):
+            from revgas_chatbot.api_revgas.api_http import ApiRevGasHttp
+
+            catalogo = carregar_catalogo_da_api(
+                ApiCadenciada(ApiRevGasHttp(url_real, chave_real, monitor=monitor), relogio),
+                ESTABELECIMENTO,
+            )
+    if catalogo is None:
+        catalogo = carregar_catalogo_da_api(cadenciada, ESTABELECIMENTO)
+    if catalogo is None:
+        _log.warning("Catálogo não veio da API RevGás; usando config/catalogo.json como fallback")
+        catalogo = carregar_catalogo(pasta_config / "catalogo.json")
     pagamentos = carregar_pagamentos(pasta_config / "pagamentos.json")
     if isinstance(api, ApiRevGasFalsa) and not api.descricoes:
-        # Ticket 06: a API de teste devolve o nome do produto nas vendas, como a real.
         api.descricoes.update({pid: produto.nome for pid, produto in catalogo.items()})
-    fila = FilaDeAtendimento(Path(pasta_dados), relogio)
+    cliente_fixo = venda_real.cliente_demo if venda_real else None
+    historico = HistoricoDeVendas(
+        api=cadenciada,
+        relogio=relogio,
+        cliente_fixo=cliente_fixo,
+        catalogo=catalogo,
+    )
     dependencias = Dependencias(
         api=cadenciada,
         registrador=RegistradorDeVendas(
@@ -203,29 +233,22 @@ def montar(
             if venda_real
             else None,
         ),
-        fila=fila,
         catalogo=catalogo,
         pagamentos=pagamentos,
         seguranca=seguranca,
-        interpretador=interpretador,
-        # Toda IA deste programa é a da cota grátis: só para os telefones da regra
-        # (padrão: fictícios; C2-1, H3, W2).
-        ia_permitida=ia_permitida,
-        # Mesma ApiCadenciada e mesma fila da venda (Q2). Só lê o ERP.
         devolucao=Devolucao(
             api=cadenciada,
             relogio=relogio,
-            fila=fila,
-            cliente_fixo=venda_real.cliente_demo if venda_real else None,
-            catalogo=catalogo,  # ticket 06: nome do produto na lista
+            cliente_fixo=cliente_fixo,
+            catalogo=catalogo,
         ),
+        historico=historico,
     )
     return Programa(
         dependencias=dependencias,
-        ia_ligada=interpretador is not None,
         venda_real=venda_real is not None,
-        ia_permitida=ia_permitida,
         avisar_entregadores=bool(venda_real and venda_real.avisar_entregadores),
+        monitor_api=monitor,
     )
 
 
@@ -239,32 +262,12 @@ def confirmar_aviso(ler: Callable[[str], str], escrever: Callable[[str], None], 
 
 
 def montar_do_ambiente(
-    pasta_dados: Path, ambiente: Mapping[str, str], *, venda_real: bool, avisar_entregadores: bool = False
+    pasta_dados: Path | None, ambiente: Mapping[str, str], *, venda_real: bool, avisar_entregadores: bool = False
 ) -> Programa:
-    """Montagem dos comandos: lê a equipe (opcional) e, com `--venda-real`, a configuração real."""
+    """Montagem dos comandos: com `--venda-real`, lê a configuração real."""
     if avisar_entregadores and not venda_real:
         raise ConfiguracaoInvalida("--avisar-entregadores só funciona junto com --venda-real")
-    regra = regra_da_ia(numeros_da_equipe(ambiente))
     config = config_venda_real(ambiente) if venda_real else None
     if config is not None and avisar_entregadores:
         config = replace(config, avisar_entregadores=True)
-    return montar(pasta_dados, ambiente=ambiente, ia_permitida=regra, venda_real=config)
-
-
-def _interpretador(ambiente: Mapping[str, str], api: ApiRevGas, *, venda_real: bool) -> InterpretadorGemini | None:
-    """IA (C2d): ligada só se houver GEMINI_API_KEY no ambiente.
-
-    Cota grátis do Gemini → o Google pode usar as mensagens (C2-1). Por isso
-    só com a API falsa (clientes fictícios), ou na venda real (D17b), em que a
-    regra `ia_permitida` limita a IA aos números fictícios e da equipe.
-    Qualquer outro uso da API de verdade com o Gemini: não inicia.
-    """
-    chave = (ambiente.get("GEMINI_API_KEY") or "").strip()
-    if not chave:
-        return None
-    if not isinstance(api, ApiRevGasFalsa) and not venda_real:
-        raise ValueError(
-            "a IA da cota grátis do Gemini só pode ser usada com a API de teste "
-            "(clientes fictícios); para clientes reais é preciso um plano pago"
-        )
-    return InterpretadorGemini(chave)
+    return montar(pasta_dados, ambiente=ambiente, venda_real=config)

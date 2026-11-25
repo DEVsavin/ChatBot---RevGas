@@ -39,7 +39,7 @@ from revgas_chatbot.montagem import (
     confirmar_aviso,
     montar_do_ambiente,
     numeros_da_equipe,
-    regra_da_ia,
+    regra_da_equipe,
 )
 
 __all__ = ["ConfiguracaoInvalida", "configuracao_waha", "criar_app_waha", "main"]
@@ -159,7 +159,7 @@ class ConfiguracaoWaha:
     numeros_equipe: tuple[str, ...] = field(repr=False)
 
     def atende(self, numero: str) -> bool:
-        return self.atender == "todos" or regra_da_ia(self.numeros_equipe)(numero)
+        return self.atender == "todos" or regra_da_equipe(self.numeros_equipe)(numero)
 
 
 def configuracao_waha(ambiente: Mapping[str, str]) -> ConfiguracaoWaha:
@@ -218,7 +218,6 @@ def main(
         if argumentos.venda_real and config.atender != "equipe":
             # I2: com "todos", qualquer contato do chip criaria venda real.
             raise ConfiguracaoInvalida("--venda-real só funciona com WAHA_ATENDER=equipe")
-        # I3: a IA continua só para fictícios e equipe, qualquer que seja WAHA_ATENDER.
         programa = montar_do_ambiente(pasta_dados, ambiente, venda_real=argumentos.venda_real,
                                       avisar_entregadores=argumentos.avisar_entregadores)
         if programa.avisar_entregadores:
@@ -244,7 +243,6 @@ def main(
     print(f"WAHA: webhook em http://{HOST}:{argumentos.porta}/webhook", flush=True)
     print(f"QR code e status da sessão: {PAINEL} (usuário e senha: WAHA_DASHBOARD_* no .env)", flush=True)
     print("Atende: " + ("só os números da equipe" if config.atender == "equipe" else "qualquer número"), flush=True)
-    print("IA: " + ("ligada só para os números da equipe" if programa.ia_ligada else "desligada"), flush=True)
     if programa.venda_real:
         print(f"*** {AVISO_VENDA_REAL} ***", flush=True)
     atendimento.ligar()

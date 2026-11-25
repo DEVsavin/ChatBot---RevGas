@@ -1,82 +1,57 @@
-"""Devolução: achar os pedidos do cliente e abrir solicitações para a equipe.
+"""Devolução: achar os pedidos do cliente e registrar a solicitação na própria venda no ERP RevGás.
 
-Nesta parte o chatbot SÓ LÊ a API: nunca cancela, estorna ou altera nada.
-Quem decide e executa é sempre uma pessoa da equipe.
+Usa apenas a API RevGás (sem banco/arquivo local):
+- `GET /v1/sales` para listar pedidos do cliente;
+- `GET /v1/sales/{id}` + `PUT /v1/sales/{id}` para anotar `[CHATBOT][TIPO] ...` na `observation`
+  da venda (preservando a observação original, troco e marca `[chatbot:<id>]`).
+O chatbot nunca cancela nem estorna sozinho; quem decide e executa é a equipe no painel do ERP.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import timedelta
 from typing import Mapping
 
 from revgas_chatbot.api_revgas.api import Relogio, TempoEsgotado
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
-from revgas_chatbot.atendimento.atendimento import TransferirAtendente
-from revgas_chatbot.atendimento.fila import TIPOS as TIPOS_DA_FILA
-from revgas_chatbot.atendimento.fila import FilaDeAtendimento
+from revgas_chatbot.atendimento.atendimento import mascarar
 from revgas_chatbot.fuso import FUSO_TERESINA
+from revgas_chatbot.vendas.historico import (
+    MAXIMO_DE_PAGINAS,
+    MAXIMO_DE_PEDIDOS,
+    HistoricoDeVendas,
+    NenhumPedido,
+    PedidoDoCliente,
+    PedidosEncontrados,
+    ResultadoDaBusca,
+    _inteiro,
+)
 from revgas_chatbot.vendas.pedido import Problema, ProdutoCatalogo
-from revgas_chatbot.vendas.venda import reais
 
-
-# Quantos pedidos o chatbot mostra ao cliente (decisão #7).
-MAXIMO_DE_PEDIDOS = 3
-
-# Teto de páginas lidas numa busca (proteção contra uma API que nunca termina).
-MAXIMO_DE_PAGINAS = 20
-
-
-@dataclass(frozen=True)
-class PedidoDoCliente:
-    id: int
-    data: date
-    itens: tuple[tuple[str, int], ...]  # (descrição, quantidade)
-    total: Decimal
-    status: str  # status da API: só para o atendente (o significado para o cliente é pendente)
-    pagamentos: tuple[str, ...] | None = None  # ticket 07: formas de pagamento; None = desconhecidas
-    criada_em: datetime | None = None  # M1 (18/11): para saber se o entregador pode ter saído
-    entregue: bool = False  # M3 (18/11): status CONFIRM ou `delivered_at`
-
-    @property
-    def cancelado(self) -> bool:
-        return self.status == "CANCEL"  # ✅ "Cancelada" na doc da API
-
-    def texto_para_cliente(self) -> str:
-        """Sem status (o significado de cada um para o cliente é pendente),
-        exceto o rótulo "(cancelado)"."""
-        texto = self._descricao()
-        return f"{texto} (cancelado)" if self.cancelado else texto
-
-    def texto_para_atendente(self) -> str:
-        return f"{self._descricao()} (status na API: {self.status})"
-
-    def _descricao(self) -> str:
-        itens = ", ".join(f"{quantidade}x {descricao}" for descricao, quantidade in self.itens)
-        return f"Pedido {self.id} de {self.data:%d/%m/%Y}: {itens}, total {reais(self.total)}"
-
-
-@dataclass(frozen=True)
-class PedidosEncontrados:
-    customer_id: int
-    nome: str | None
-    pedidos: tuple[PedidoDoCliente, ...]
-
-
-@dataclass(frozen=True)
-class NenhumPedido:
-    """Cliente não cadastrado ou sem pedido no prazo: o chatbot oferece o atendente."""
-
-
-ResultadoDaBusca = PedidosEncontrados | NenhumPedido | TransferirAtendente
+__all__ = [
+    "MAXIMO_DE_PAGINAS",
+    "MAXIMO_DE_PEDIDOS",
+    "MAX_TEXTO",
+    "PREFERENCIAS",
+    "REGRAS",
+    "Devolucao",
+    "NenhumPedido",
+    "PedidoDoCliente",
+    "PedidosEncontrados",
+    "RegraDoTipo",
+    "ResultadoDaBusca",
+    "ResultadoDaSolicitacao",
+    "SolicitacaoAberta",
+    "SolicitacaoInvalida",
+]
 
 
 @dataclass(frozen=True)
 class SolicitacaoAberta:
     protocolo: str
     mensagem_para_cliente: str
-    entregador_pode_ter_saido: bool = False  # M1: a conversa avisa o cliente antes do protocolo
+    entregador_pode_ter_saido: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,18 +69,16 @@ ResultadoDaSolicitacao = SolicitacaoAberta | SolicitacaoInvalida
 
 @dataclass(frozen=True)
 class RegraDoTipo:
-    motivos: dict[str, str]  # motivo -> como aparece no resumo
+    motivos: dict[str, str]
     preferencia: str  # "obrigatoria", "opcional" ou "proibida"
 
 
 _SO_TEXTO = {"OUTRO": "descrito pelo cliente"}
 
-# Tipos que se abrem por `solicitar` (decisões #2, #6, #8 e #9).
-# VAZAMENTO tem fluxo próprio; VENDA e COMPROVANTE_PIX vêm de outros fluxos.
 REGRAS = {
     "CANCELAMENTO": RegraDoTipo(
-        motivos={"DESISTI": "desisti", "PEDI_ERRADO": "pedi errado", "OUTRO": "outro"},  # DC-4: sem "demorou"
-        preferencia="opcional",  # o pedido pode nem ter sido pago
+        motivos={"DESISTI": "desisti", "PEDI_ERRADO": "pedi errado", "OUTRO": "outro"},
+        preferencia="opcional",
     ),
     "ESTORNO": RegraDoTipo(
         motivos={
@@ -116,16 +89,13 @@ REGRAS = {
         },
         preferencia="obrigatoria",
     ),
-    # O chatbot reconhece e transfere: só texto livre.
     "PROBLEMA_PRODUTO": RegraDoTipo(motivos=_SO_TEXTO, preferencia="proibida"),
     "ALTERACAO": RegraDoTipo(motivos=_SO_TEXTO, preferencia="proibida"),
     "VASILHAME": RegraDoTipo(motivos=_SO_TEXTO, preferencia="proibida"),
 }
-assert set(REGRAS) <= set(TIPOS_DA_FILA), "todo tipo de solicitação precisa existir na fila"
 
 MAX_TEXTO = 200
 
-# Preferência do cliente se houver valor a devolver (decisão #8).
 PREFERENCIAS = {
     "CREDITO_PROXIMA_COMPRA": "crédito na próxima compra",
     "DINHEIRO_DE_VOLTA": "dinheiro de volta",
@@ -138,23 +108,21 @@ class Devolucao:
         *,
         api: ApiCadenciada,
         relogio: Relogio,
-        fila: FilaDeAtendimento,
         prazo_dias: int = 7,
-        cliente_fixo: int | None = None,  # --venda-real: /customers dá 403 (D16)
-        catalogo: Mapping[int, ProdutoCatalogo] | None = None,  # ticket 06: nome do produto
+        cliente_fixo: int | None = None,
+        catalogo: Mapping[int, ProdutoCatalogo] | None = None,
     ) -> None:
         if not isinstance(api, ApiCadenciada):
-            # Uma API crua aqui criaria um segundo controle de ritmo (ou nenhum).
             raise TypeError("Devolucao precisa da ApiCadenciada compartilhada (ponto único de montagem)")
         self._api = api
         self._relogio = relogio
-        self._fila = fila
         self._prazo_dias = prazo_dias
         self._cliente_fixo = cliente_fixo
-        self._nomes = {pid: p.nome for pid, p in (catalogo or {}).items()}
+        self._historico = HistoricoDeVendas(
+            api=api, relogio=relogio, cliente_fixo=cliente_fixo, catalogo=catalogo
+        )
 
     def _entregador_pode_ter_saido(self, tipo: str, pedido: PedidoDoCliente | None) -> bool:
-        """M1 (18/11): cancelamento de pedido não entregue feito há até 2 horas (pelos dados do pedido)."""
         if tipo != "CANCELAMENTO" or pedido is None or pedido.criada_em is None:
             return False
         if pedido.entregue or pedido.cancelado:
@@ -163,93 +131,12 @@ class Devolucao:
 
     @property
     def usa_cliente_fixo(self) -> bool:
-        """Modo real: os pedidos vêm do cliente de demonstração, não do telefone."""
         return self._cliente_fixo is not None
 
     def pedidos_do_cliente(self, telefone: str) -> ResultadoDaBusca:
-        """Até 3 pedidos do cliente no prazo de devolução, mais recentes primeiro.
-
-        Só leitura (GET). Vendas de qualquer canal. O prazo de N dias inclui
-        do dia (hoje − N) até hoje, em datas de Teresina.
-
-        Não confia nos filtros nem na ordem da API: lê todas as páginas,
-        confere o cliente e a data de cada venda e ordena aqui. Assim um
-        pedido de outra pessoa nunca aparece, mesmo se a API errar.
-
-        ⚠️ A busca por telefone tem o risco da D8 da criar-venda (número com
-        ou sem o 9º dígito): um "não encontrado" pode ser falso.
-
-        Qualquer falha ou ambiguidade vira `TransferirAtendente`; nada encontrado
-        vira `NenhumPedido`.
-        """
-        if self._cliente_fixo is not None:
-            # Modo real: as vendas do cliente de demonstração, sem buscar pelo telefone.
-            return self._pedidos_de(self._cliente_fixo, None)
-        try:
-            resposta = self._api.buscar_clientes(telefone)
-        except TempoEsgotado:
-            return TransferirAtendente("sem resposta da API ao buscar o cliente")
-        if resposta.status != 200:
-            return TransferirAtendente(f"erro HTTP {resposta.status} ao buscar o cliente")
-        clientes = _lista(resposta.dados)
-        if clientes is None or not all(_inteiro(c.get("id")) for c in clientes):
-            return TransferirAtendente("resposta inesperada da API ao buscar o cliente")
-        if not clientes:
-            return NenhumPedido()
-        if len(clientes) > 1:
-            return TransferirAtendente("mais de um cliente com o mesmo telefone")
-        [cliente] = clientes
-        nome = cliente.get("name")
-        return self._pedidos_de(cliente["id"], nome if isinstance(nome, str) else None)
-
-    def _pedidos_de(self, customer_id: int, nome: str | None) -> ResultadoDaBusca:
-        hoje = self._relogio.agora().astimezone(FUSO_TERESINA).date()
-        inicio = hoje - timedelta(days=self._prazo_dias)
-        vendas = []
-        for pagina in range(1, MAXIMO_DE_PAGINAS + 1):
-            try:
-                resposta = self._api.buscar_vendas(
-                    customer_id=customer_id,
-                    channel=None,
-                    de=inicio,
-                    ate=hoje + timedelta(days=1),  # folga para o fuso da API
-                    pagina=pagina,
-                )
-            except TempoEsgotado:
-                return TransferirAtendente("sem resposta da API ao buscar os pedidos")
-            if resposta.status != 200:
-                return TransferirAtendente(f"erro HTTP {resposta.status} ao buscar os pedidos")
-            lista = _lista(resposta.dados)
-            if lista is None:
-                return TransferirAtendente("resposta inesperada da API ao buscar os pedidos")
-            vendas.extend(lista)
-            if not _tem_proxima(resposta.dados):
-                break
-        else:
-            return TransferirAtendente("pedidos demais para listar com segurança")
-
-        if self._cliente_fixo is not None:
-            # M2 (18/11): no modo real, só as vendas feitas pelo chatbot (não as do painel).
-            vendas = [v for v in vendas if "[chatbot:" in str(v.get("observation") or "")]
-        # Só as vendas DESTE cliente são validadas: venda de balcão (sem cliente)
-        # ou de outra pessoa é simplesmente ignorada, mesmo se vier estranha.
-        do_cliente = [v for v in vendas if _inteiro(v.get("customer_id")) and v["customer_id"] == customer_id]
-        try:
-            convertidas = [_venda(v, self._nomes) for v in do_cliente]
-        except _VendaInvalida:
-            return TransferirAtendente("resposta inesperada da API ao buscar os pedidos")
-        do_cliente_no_prazo = [
-            (criada_em, pedido) for criada_em, pedido in convertidas if inicio <= pedido.data <= hoje
-        ]
-        if not do_cliente_no_prazo:
-            return NenhumPedido()
-        do_cliente_no_prazo.sort(key=lambda par: par[0], reverse=True)  # mais novo primeiro
-        return PedidosEncontrados(
-            customer_id=customer_id,
-            nome=nome,
-            pedidos=tuple(pedido for _, pedido in do_cliente_no_prazo[:MAXIMO_DE_PEDIDOS]),
+        return self._historico.pedidos_do_cliente(
+            telefone, prazo_dias=self._prazo_dias, limite=MAXIMO_DE_PEDIDOS
         )
-
 
     def solicitar(
         self,
@@ -261,19 +148,12 @@ class Devolucao:
         motivo: str,
         texto: str | None = None,
         preferencia: str | None = None,
-        nota: str | None = None,  # observação do sistema para a equipe (ex.: por que não há pedido)
+        nota: str | None = None,
     ) -> ResultadoDaSolicitacao:
-        """Abre a solicitação na fila para uma pessoa da equipe resolver.
+        """Registra a solicitação na `observation` da venda no ERP (`PUT /sales/{id}`).
 
-        - `encontrados`: o que `pedidos_do_cliente` devolveu para este telefone
-          (None se o cliente não foi encontrado). Assim o pedido é sempre do cliente.
-        - `escolha`: o número do pedido na lista (1, 2, 3) ou None ("não achei").
-        - `texto`: o que o cliente escreveu; obrigatório com o motivo OUTRO e
-          aceito com os demais. Vai para a fila como texto do cliente (mascarado).
-
-        Não chama a API: o chatbot nunca cancela nem estorna sozinho.
-        Dado inválido do cliente → `SolicitacaoInvalida` e nada é gravado.
-        Argumento de tipo errado → TypeError (erro de programação).
+        Sem arquivo local: se houver pedido escolhido, anota diretamente na venda via API;
+        se não houver pedido vinculado, orienta o cliente a falar com a revenda.
         """
         if tipo not in REGRAS:
             raise ValueError(f"tipo que não se abre por solicitar: {tipo!r}")
@@ -310,109 +190,110 @@ class Devolucao:
         if problemas:
             return SolicitacaoInvalida(tuple(problemas))
 
-        linhas = [
-            pedido.texto_para_atendente() if pedido else "O cliente não encontrou o pedido na lista.",
-            f"Motivo: {regra.motivos[motivo]}",
-        ]
         recente = self._entregador_pode_ter_saido(tipo, pedido)
-        if recente:
+        if pedido is None:
+            return SolicitacaoAberta(
+                entregador_pode_ter_saido=False,
+                protocolo="ATENDIMENTO",
+                mensagem_para_cliente=(
+                    "Não consegui vincular sua solicitação a um pedido no sistema. "
+                    "Entre em contato diretamente com a equipe da revenda para atendimento."
+                ),
+            )
+
+        partes = [f"[CHATBOT][{tipo}]", f"Motivo: {regra.motivos[motivo]}."]
+        if texto:
+            partes.append(f"Relato: {mascarar(texto)}.")
+        if recente and pedido.criada_em is not None:
             hora = pedido.criada_em.astimezone(FUSO_TERESINA).strftime("%H:%M")
-            linhas.append(f"Pedido feito às {hora} e ainda não entregue: o entregador pode já ter saído.")
+            partes.append(f"Pedido feito às {hora} (entregador pode ter saído).")
         if preferencia is not None:
-            rotulo = "Preferência" if regra.preferencia == "obrigatoria" else "Preferência, se houver valor a devolver"
-            linhas.append(f"{rotulo}: {PREFERENCIAS[preferencia]}")
+            partes.append(f"Preferência: {PREFERENCIAS[preferencia]}.")
         if nota:
-            linhas.append(nota)
-        protocolo = self._fila.abrir(
-            tipo,
-            telefone,
-            "\n".join(linhas),
-            nome=encontrados.nome if encontrados else None,
-            # Só identificadores e escolhas de lista: o texto do cliente vai à parte.
-            dados={
-                "pedido_id": pedido.id if pedido else None,
-                "customer_id": encontrados.customer_id if encontrados else None,
-                "motivo": motivo,
-                "preferencia": preferencia,
-            },
-            texto_cliente=texto,
-            alta=recente,
-        )
+            partes.append(nota)
+        anotacao = " ".join(partes)
+
+        anotado = self._anotar_na_venda(pedido.id, anotacao)
+        if not anotado:
+            raise RuntimeError("não foi possível registrar a solicitação na venda via API RevGás")
+
         return SolicitacaoAberta(
             entregador_pode_ter_saido=recente,
-            protocolo=protocolo,
+            protocolo=f"ERP-{pedido.id}",
             mensagem_para_cliente=(
-                f"Sua solicitação foi registrada com o protocolo {protocolo}. "
-                "Uma pessoa da nossa equipe vai continuar o atendimento."
+                f"Sua solicitação foi registrada no pedido {pedido.id} (protocolo ERP-{pedido.id}). "
+                "Nossa equipe vai analisar pelo painel."
             ),
         )
 
-
-class _VendaInvalida(Exception):
-    """Venda da API fora do formato esperado."""
-
-
-def _inteiro(valor: object) -> bool:
-    return isinstance(valor, int) and not isinstance(valor, bool)  # bool é subclasse de int
-
-
-def _lista(dados: object) -> list[dict] | None:
-    """A lista `data` de uma resposta de listagem, ou None se vier fora do formato."""
-    lista = dados.get("data") if isinstance(dados, dict) else None
-    if not isinstance(lista, list) or not all(isinstance(item, dict) for item in lista):
-        return None
-    return lista
-
-
-def _tem_proxima(dados: dict) -> bool:
-    paginacao = dados.get("pagination")
-    return isinstance(paginacao, dict) and paginacao.get("has_next") is True
+    def _anotar_na_venda(self, venda_id: int, anotacao: str) -> bool:
+        try:
+            atual = self._api.buscar_venda(venda_id)
+        except TempoEsgotado:
+            return False
+        if atual.status != 200 or not isinstance(atual.dados, dict):
+            return False
+        obs_atual = str(atual.dados.get("observation") or "").strip()
+        nova_obs = f"{obs_atual} | {anotacao}" if obs_atual else anotacao
+        corpo = montar_corpo_atualizacao_obs(atual.dados, nova_obs)
+        try:
+            resposta = self._api.atualizar_venda(venda_id, corpo)
+        except TempoEsgotado:
+            return False
+        return 200 <= resposta.status < 300
 
 
-def _venda(venda: dict, nomes: Mapping[int, str] | None = None) -> tuple[datetime, PedidoDoCliente]:
-    """(criada_em, pedido) de uma venda do cliente; lança _VendaInvalida."""
-    try:
-        if not _inteiro(venda.get("id")):
-            raise _VendaInvalida("id")
-        criada_em = datetime.fromisoformat(venda["created_at"])
-        if criada_em.tzinfo is None:
-            raise _VendaInvalida("created_at sem fuso")
-        produtos = venda.get("products")
-        if not isinstance(produtos, list) or not produtos:
-            raise _VendaInvalida("sem produtos")
-        itens = []
-        for p in produtos:
-            if not isinstance(p, dict) or not _inteiro(p.get("quantity")) or p["quantity"] < 1:
-                raise _VendaInvalida("quantidade")
-            descricao = p.get("product_description")
-            if not isinstance(descricao, str) or not descricao.strip():
-                # Ticket 06: sem descrição, o nome do catálogo; "produto N" só se não estiver nele.
-                descricao = (nomes or {}).get(p.get("product_id")) or f"produto {p.get('product_id')}"
-            itens.append((descricao, p["quantity"]))
-        total = Decimal(str(venda["total"]))
-        if not total.is_finite():
-            raise _VendaInvalida("total")
-        status = venda.get("status")
-        if not isinstance(status, str):
-            raise _VendaInvalida("status")
-    except (KeyError, TypeError, ValueError, ArithmeticError) as erro:
-        raise _VendaInvalida(str(erro)) from erro
-    pagamentos = venda.get("payments")
-    formas = (
-        tuple(p["payment_type"] for p in pagamentos)
-        if isinstance(pagamentos, list)
-        and pagamentos
-        and all(isinstance(p, dict) and isinstance(p.get("payment_type"), str) for p in pagamentos)
-        else None
-    )
-    pedido = PedidoDoCliente(
-        id=venda["id"],
-        data=criada_em.astimezone(FUSO_TERESINA).date(),
-        itens=tuple(itens),
-        total=total,
-        status=status,
-        pagamentos=formas,
-        criada_em=criada_em,
-        entregue=status == "CONFIRM" or bool(venda.get("delivered_at")),
-    )
-    return criada_em, pedido
+def montar_corpo_atualizacao_obs(venda_atual: dict, nova_obs: str) -> dict:
+    """Monta o corpo completo do `PUT /v1/sales/{id}` preservando os campos da venda atual.
+
+    A API RevGás exige os campos obrigatórios (ex.: `channel`, `establishment_id`,
+    `products`, `payments`, endereço) no `PUT /sales/{id}`, senão responde 400
+    (`sale channel cannot be null`).
+    """
+    corpo: dict = {
+        "observation": nova_obs,
+        "origin": venda_atual.get("origin") or "INTEGRATION",
+        "option": venda_atual.get("option") or "NORMAL",
+    }
+    for campo in (
+        "establishment_id",
+        "customer_id",
+        "deliverer_id",
+        "channel",
+        "location",
+        "number",
+        "neighborhood",
+        "city",
+        "state_federation",
+        "complement",
+        "landmark",
+        "lat",
+        "lon",
+    ):
+        valor = venda_atual.get(campo)
+        if valor is not None:
+            corpo[campo] = valor
+    if isinstance(venda_atual.get("products"), list):
+        corpo["products"] = [
+            {
+                "product_id": p["product_id"],
+                "quantity": p["quantity"],
+                "value": p["value"],
+            }
+            for p in venda_atual["products"]
+            if isinstance(p, dict) and "product_id" in p and "quantity" in p and "value" in p
+        ]
+    if isinstance(venda_atual.get("payments"), list):
+        pagamentos = []
+        for p in venda_atual["payments"]:
+            if not isinstance(p, dict):
+                continue
+            tipo = p.get("payment_type") or p.get("type")
+            if tipo and "value" in p:
+                item: dict = {"payment_type": tipo, "value": p["value"]}
+                if p.get("serial"):
+                    item["serial"] = p["serial"]
+                pagamentos.append(item)
+        if pagamentos:
+            corpo["payments"] = pagamentos
+    return corpo

@@ -62,11 +62,35 @@ class ApiCadenciada:
         return self._chamar(lambda: self._api.criar_venda(corpo))
 
     def buscar_vendas(
-        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int
+        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int, page_size: int = 100
     ) -> Resposta:
         return self._chamar(
             lambda: self._api.buscar_vendas(
-                customer_id=customer_id, channel=channel, de=de, ate=ate, pagina=pagina
+                customer_id=customer_id, channel=channel, de=de, ate=ate, pagina=pagina, page_size=page_size
+            )
+        )
+
+    def buscar_venda(self, venda_id: int) -> Resposta:
+        return self._chamar(lambda: self._api.buscar_venda(venda_id))
+
+    def atualizar_venda(self, venda_id: int, corpo: dict[str, Any]) -> Resposta:
+        return self._chamar(lambda: self._api.atualizar_venda(venda_id, corpo))
+
+    def buscar_produtos(
+        self, *, establishment_id: int, pagina: int = 1, page_size: int = 100
+    ) -> Resposta:
+        return self._chamar(
+            lambda: self._api.buscar_produtos(
+                establishment_id=establishment_id, pagina=pagina, page_size=page_size
+            )
+        )
+
+    def buscar_acordos(
+        self, *, establishment_id: int, pagina: int = 1, page_size: int = 100
+    ) -> Resposta:
+        return self._chamar(
+            lambda: self._api.buscar_acordos(
+                establishment_id=establishment_id, pagina=pagina, page_size=page_size
             )
         )
 

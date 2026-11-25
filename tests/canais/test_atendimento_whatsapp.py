@@ -2,7 +2,7 @@
 
 Seam: AtendimentoWhatsApp.receber(MensagemRecebida) — o que o receptor do
 WAHA entrega depois de conferir assinatura, filtros e repetidas (esses ficam
-em test_canal_waha.py) —, com a API de teste da RevGás, uma IA falsa e um
+em test_canal_waha.py) —, com a API de teste da RevGás, e um
 enviador falso. Sem internet. Os números "da equipe" são inventados.
 """
 
@@ -14,8 +14,7 @@ import pytest
 from revgas_chatbot.api_revgas.api_falsa import RelogioFalso
 from revgas_chatbot.canais.atendimento_whatsapp import NAO_TEXTO, AtendimentoWhatsApp, MensagemRecebida
 from revgas_chatbot.fuso import FUSO_TERESINA
-from revgas_chatbot.ia.interpretacao import Interpretacao, InterpretadorFalso
-from revgas_chatbot.montagem import api_de_demonstracao, montar, regra_da_ia
+from revgas_chatbot.montagem import api_de_demonstracao, montar, regra_da_equipe
 
 MARIA = "5500900000001"  # cadastrada na API de teste
 EQUIPE = "5586999990000"  # inventado
@@ -40,12 +39,10 @@ class EnviadorFalso:
 class WhatsAppSimulado:
     """Entrega mensagens ao atendimento, como o receptor faria, e espera ele terminar."""
 
-    def __init__(self, tmp_path, *, ia=None, criar_conversa=None):
+    def __init__(self, tmp_path, *, criar_conversa=None):
         self.api = api_de_demonstracao(RelogioFalso(datetime(2026, 11, 12, 15, 0, tzinfo=FUSO_TERESINA)))
-        self.ia = ia or InterpretadorFalso()
         self.pasta = tmp_path
-        programa = montar(tmp_path, relogio=self.api.relogio, api=self.api, ambiente={},
-                          interpretador=self.ia, ia_permitida=regra_da_ia([EQUIPE]))
+        programa = montar(tmp_path, relogio=self.api.relogio, api=self.api, ambiente={})
         self.enviador = EnviadorFalso()
         self.atendimento = AtendimentoWhatsApp(
             criar_conversa or (lambda tel: programa(tel, numero_confiavel=True)), self.enviador)
@@ -79,7 +76,7 @@ def test_primeira_mensagem_cumprimenta_e_confirma_o_numero(wa):
 
 
 def test_pedido_completo_pelo_whatsapp(wa):
-    respostas = wa.conversa("oi", "sim", "2", "sim", "1", "1")
+    respostas = wa.conversa("oi", "sim", "2", "sim", "1", "2", "1")
 
     assert respostas[-1].startswith("Pedido registrado!")
     assert len(wa.api.vendas_criadas()) == 1
@@ -146,50 +143,18 @@ def test_primeira_mensagem_com_cheiro_de_gas_recebe_as_orientacoes_primeiro(wa):
 
     assert respostas[0].startswith("Atenção, possível vazamento de gás")
     assert not any(r.startswith("Olá! Sou") for r in respostas)
-    assert "URGENTE" in (wa.pasta / "fila.html").read_text(encoding="utf-8")
+    assert "193" in "\n".join(respostas)
 
 
 def test_primeira_mensagem_pedindo_atendente_transfere(wa):
     respostas = wa.conversa("quero falar com um atendente")
 
-    assert "ATD-" in "\n".join(respostas)
+    assert "equipe" in "\n".join(respostas).lower()
     assert not any(r.startswith("Olá! Sou") for r in respostas)
 
 
-# --- W2: IA só para os números da equipe -------------------------------------------------
-
-
-@pytest.mark.parametrize("numero", [EQUIPE, EQUIPE_SEM_9])
-def test_numero_da_equipe_usa_a_ia(tmp_path, numero):
-    ia = InterpretadorFalso({"manda o de sempre": Interpretacao(intencao="PEDIR", produto="botijão de gás",
-                                                               quantidade=2)})
-    wa = WhatsAppSimulado(tmp_path, ia=ia)
-    wa.conversa("oi", "sim", "Fulano", "manda o de sempre", de=numero)
-    wa.atendimento.desligar()
-
-    assert "manda o de sempre" in [t for t, _ in ia.recebidos]
-
-
-def test_numero_fora_da_equipe_nunca_usa_a_ia(tmp_path):
-    ia = InterpretadorFalso()
-    wa = WhatsAppSimulado(tmp_path, ia=ia)
-    wa.conversa("oi", "sim", "Fulano", "manda o de sempre, por favor", de=OUTRO)
-    wa.atendimento.desligar()
-
-    assert ia.recebidos == []
-
-
-def test_equipe_que_troca_para_outro_numero_perde_a_ia(tmp_path):
-    ia = InterpretadorFalso()
-    wa = WhatsAppSimulado(tmp_path, ia=ia)
-    wa.conversa("oi", "não", "(86) 98888-0000", "sim", "Fulano", "manda o de sempre, por favor", de=EQUIPE)
-    wa.atendimento.desligar()
-
-    assert ia.recebidos == []
-
-
-def test_regra_da_ia():
-    regra = regra_da_ia(["(86) 99999-0000"])
+def test_regra_da_equipe():
+    regra = regra_da_equipe(["(86) 99999-0000"])
 
     assert regra(EQUIPE) and regra(EQUIPE_SEM_9) and regra(MARIA)  # MARIA: fictício (DDD 00)
     assert not regra(OUTRO)
@@ -239,17 +204,17 @@ from revgas_chatbot.montagem import ConfigVendaReal  # noqa: E402
 
 def test_modo_real_pelo_whatsapp_nao_busca_cadastro_e_usa_o_cliente_fixo(tmp_path):
     api = api_de_demonstracao(RelogioFalso(datetime(2026, 11, 13, 15, 0, tzinfo=FUSO_TERESINA)))
-    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, ia_permitida=regra_da_ia([EQUIPE]),
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={},
                       venda_real=ConfigVendaReal(url="https://api.exemplo.test/v1", chave="k", cliente_demo=5700355))
     wa = WhatsAppSimulado(tmp_path, criar_conversa=lambda tel: programa(tel, numero_confiavel=True))
     wa.api = api
-    respostas = wa.conversa("oi", "sim", "Fulano", "1", "Rua Inventada", "10", "Centro", "Teresina", "PI",
-                            "pular", "pular", "1", "1", de=EQUIPE)
+    respostas = wa.conversa("oi", "sim", "Fulano", "1", "Rua Inventada", "10", "pular", "Centro", "Teresina",
+                            "pular", "pular", "1", "2", "1", de=EQUIPE)
     wa.atendimento.desligar()
 
     assert "Qual é o seu nome?" in respostas
     assert respostas[-1].startswith("Pedido registrado!")
-    assert api.operacoes == ["criar_venda"]
+    assert "buscar_clientes" not in api.operacoes and "criar_venda" in api.operacoes
     assert api.vendas_criadas()[0]["customer_id"] == 5700355
 
 

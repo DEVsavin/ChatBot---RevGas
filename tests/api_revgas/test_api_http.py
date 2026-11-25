@@ -92,6 +92,7 @@ def test_buscar_vendas_com_os_filtros_da_doc():
     assert (r.method, r.url.path) == ("GET", "/v1/sales")
     assert dict(r.url.params) == {
         "customer_id": "9", "channel": "WHATSAPP", "from": "2026-11-11", "to": "2026-11-13", "page": "2",
+        "page_size": "100",
     }
 
 

@@ -16,7 +16,6 @@ from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_revgas.api_falsa import TIMEOUT_SEM_CRIAR, ApiRevGasFalsa, RelogioFalso
 from revgas_chatbot.atendimento.atendimento import TransferirAtendente
 from revgas_chatbot.devolucao.devolucao import Devolucao, NenhumPedido, PedidosEncontrados
-from revgas_chatbot.atendimento.fila import FilaDeAtendimento
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.vendas.pedido import Endereco, Item, Pagamento, Pedido, ProdutoCatalogo
 from revgas_chatbot.vendas.registro import RegistradorDeVendas
@@ -53,9 +52,8 @@ def semear(api, *, dias_atras=0, canal="WHATSAPP", status=None, quantidade=1, cl
 
 
 def devolucao(api, prazo_dias=7) -> Devolucao:
-    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
     return Devolucao(
-        api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, prazo_dias=prazo_dias
+        api=ApiCadenciada(api, api.relogio), relogio=api.relogio, prazo_dias=prazo_dias
     )
 
 
@@ -255,7 +253,7 @@ def test_venda_e_devolucao_na_mesma_api_cadenciada_respeitam_1_segundo():
         establishment_id=2580,
     )
     busca = Devolucao(
-        api=cadenciada, relogio=api.relogio, fila=FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
+        api=cadenciada, relogio=api.relogio
     )
 
     busca.pedidos_do_cliente(TELEFONE)
@@ -335,9 +333,8 @@ def test_pedidos_demais_transfere_em_vez_de_ler_sem_fim():
 
 def test_devolucao_exige_a_api_cadenciada_compartilhada():
     api = nova_api()
-    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
     with pytest.raises(TypeError, match="ApiCadenciada"):
-        Devolucao(api=api, relogio=api.relogio, fila=fila)
+        Devolucao(api=api, relogio=api.relogio)
 
 
 def test_venda_estranha_de_outra_pessoa_ou_de_balcao_e_ignorada():
@@ -371,8 +368,7 @@ def test_cliente_fixo_lista_as_vendas_dele_sem_buscar_cliente():
     for v in api.vendas:  # M2 (18/11): no modo real só entram as vendas com a marca do chatbot
         v["observation"] = "DEMONSTRAÇÃO DO CHATBOT. [chatbot:x]"
     semear(api, cliente=77)  # de outra pessoa: não aparece
-    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
-    d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, cliente_fixo=5700355)
+    d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, cliente_fixo=5700355)
 
     resultado = d.pedidos_do_cliente(TELEFONE)
 
@@ -415,8 +411,7 @@ def _sem_descricao(api, product_id=26717, pagamentos=None):
 
 
 def _com_catalogo(api):
-    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
-    return Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, catalogo=CATALOGO_DE_TESTE)
+    return Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, catalogo=CATALOGO_DE_TESTE)
 
 
 def test_06_sem_descricao_usa_o_nome_do_catalogo():
@@ -462,7 +457,6 @@ def test_07_pedido_traz_as_formas_de_pagamento(pagamentos, formas):
 def test_m2_modo_real_ignora_vendas_do_painel():
     api = nova_api()
     semear(api, dias_atras=1, cliente=5700355)  # sem a marca: feita no painel
-    fila = FilaDeAtendimento(Path(tempfile.mkdtemp()), api.relogio)
-    d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, fila=fila, cliente_fixo=5700355)
+    d = Devolucao(api=ApiCadenciada(api, api.relogio), relogio=api.relogio, cliente_fixo=5700355)
 
     assert isinstance(d.pedidos_do_cliente(TELEFONE), NenhumPedido)

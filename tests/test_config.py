@@ -17,12 +17,13 @@ def test_catalogo_real_tem_o_botijao_de_gas_a_110():
     assert catalogo == {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
 
 
-def test_pagamentos_reais_sao_os_quatro_escolhidos():
+def test_pagamentos_reais_sao_os_cinco_escolhidos():
     assert carregar_pagamentos(CONFIG / "pagamentos.json") == {
         "PIX",
         "MONEY",
         "CARTAO_DE_DEBITO",
         "CARTAO_DE_CREDITO",
+        "VALEGAS",
     }
 
 

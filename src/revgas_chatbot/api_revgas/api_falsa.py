@@ -27,7 +27,18 @@ from revgas_chatbot.fuso import FUSO_TERESINA
 TIMEOUT_SEM_CRIAR = "timeout_sem_criar"  # a requisição se perdeu antes de chegar
 TIMEOUT_DEPOIS_DE_CRIAR = "timeout_depois_de_criar"  # o servidor criou, a resposta se perdeu
 
-OPERACOES = frozenset({"buscar_clientes", "cadastrar_cliente", "criar_venda", "buscar_vendas"})
+OPERACOES = frozenset(
+    {
+        "buscar_clientes",
+        "cadastrar_cliente",
+        "criar_venda",
+        "buscar_vendas",
+        "buscar_venda",
+        "atualizar_venda",
+        "buscar_produtos",
+        "buscar_acordos",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +76,8 @@ class ApiRevGasFalsa:
     relogio: RelogioFalso = field(default_factory=RelogioFalso)
     clientes: list[dict[str, Any]] = field(default_factory=list)
     vendas: list[dict[str, Any]] = field(default_factory=list)
+    produtos: list[dict[str, Any]] = field(default_factory=list)
+    acordos: list[dict[str, Any]] = field(default_factory=list)
     # Instantes em que cada requisição chegou (para conferir o limite de 1 req/s).
     requisicoes: list[datetime] = field(default_factory=list)
     # Operação de cada requisição, na ordem (ex.: para conferir que nada foi gravado).
@@ -116,11 +129,42 @@ class ApiRevGasFalsa:
         return self._executar("criar_venda", lambda: self._criar_venda(corpo))
 
     def buscar_vendas(
-        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int
+        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int, page_size: int = 100
     ) -> Resposta:
+        self.ultimo_page_size = page_size
         return self._executar(
             "buscar_vendas",
             lambda: self._buscar_vendas(customer_id, channel, de, ate, pagina),
+        )
+
+    def buscar_venda(self, venda_id: int) -> Resposta:
+        return self._executar("buscar_venda", lambda: self._buscar_venda(venda_id))
+
+    def atualizar_venda(self, venda_id: int, corpo: dict[str, Any]) -> Resposta:
+        return self._executar("atualizar_venda", lambda: self._atualizar_venda(venda_id, corpo))
+
+    def buscar_produtos(
+        self, *, establishment_id: int, pagina: int = 1, page_size: int = 100
+    ) -> Resposta:
+        return self._executar(
+            "buscar_produtos",
+            lambda: self._paginar(
+                [p for p in self.produtos if p.get("establishment_id", establishment_id) == establishment_id],
+                pagina,
+                page_size,
+            ),
+        )
+
+    def buscar_acordos(
+        self, *, establishment_id: int, pagina: int = 1, page_size: int = 100
+    ) -> Resposta:
+        return self._executar(
+            "buscar_acordos",
+            lambda: self._paginar(
+                [a for a in self.acordos if a.get("establishment_id", establishment_id) == establishment_id],
+                pagina,
+                page_size,
+            ),
         )
 
     # --- implementação ---------------------------------------------------------
@@ -166,17 +210,45 @@ class ApiRevGasFalsa:
             else dict(p)
             for p in corpo["products"]
         ]
+        venda_id = self._novo_id()
+        criada_em = self.relogio.agora().isoformat()
+        status = corpo.get("status") or "ACTIVE"
+        logs = corpo.get("logs") or [
+            {"id": 1, "sale_id": venda_id, "status": status, "user_name": "Chatbot", "created_at": criada_em}
+        ]
         venda = {
             **corpo,
             "products": produtos,
-            "id": self._novo_id(),
-            "status": "ACTIVE",
+            "id": venda_id,
+            "status": status,
             "total": total,
-            "created_at": self.relogio.agora().isoformat(),
+            "created_at": criada_em,
+            "logs": logs,
+            "deliverer_name": corpo.get("deliverer_name"),
             "_visivel_apos": self._buscas_de_vendas + self.atraso_de_visibilidade,
         }
         self.vendas.append(venda)
         return Resposta(201, _publico(venda))
+
+    def _buscar_venda(self, venda_id: int) -> Resposta:
+        for venda in self.vendas:
+            if venda["id"] == venda_id:
+                return Resposta(200, _publico(venda))
+        return Resposta(404, {"message": "Venda não encontrada."})
+
+    def _atualizar_venda(self, venda_id: int, corpo: dict[str, Any]) -> Resposta:
+        for venda in self.vendas:
+            if venda["id"] == venda_id:
+                venda.update(corpo)
+                return Resposta(200, _publico(venda))
+        return Resposta(404, {"message": "Venda não encontrada."})
+
+    @staticmethod
+    def _paginar(itens: list[dict[str, Any]], pagina: int, page_size: int) -> Resposta:
+        inicio = (pagina - 1) * page_size
+        fatia = [dict(i) for i in itens[inicio : inicio + page_size]]
+        tem_mais = inicio + page_size < len(itens)
+        return Resposta(200, {"data": fatia, "pagination": {"page": pagina, "has_next": tem_mais}})
 
     def _buscar_vendas(
         self, customer_id: int, channel: str | None, de: date, ate: date, pagina: int

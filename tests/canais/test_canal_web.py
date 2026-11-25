@@ -1,8 +1,7 @@
 """Testes do W2: o servidor web do chat, pelas rotas HTTP.
 
 Seam combinado: canal_web.criar_app(...) com o TestClient do FastAPI (sem
-abrir porta, sem internet), usando a montagem real, a API de teste e uma IA
-falsa. Dados fictícios (DDD 00) e um número "real" inventado só para o teste.
+abrir porta, sem internet), usando a montagem real, e a API de teste. Dados fictícios (DDD 00) e um número "real" inventado só para o teste.
 """
 
 import threading
@@ -16,7 +15,6 @@ from fastapi.testclient import TestClient
 from revgas_chatbot.api_revgas.api_falsa import RelogioFalso
 from revgas_chatbot.canais.canal_web import criar_app, main
 from revgas_chatbot.fuso import FUSO_TERESINA
-from revgas_chatbot.ia.interpretacao import Interpretacao, InterpretadorFalso
 from revgas_chatbot.montagem import api_de_demonstracao, montar
 
 BASE = "http://127.0.0.1:8000"
@@ -25,18 +23,13 @@ REAL = "(86) 99999-0000"  # um número que não é fictício (nunca é chamado)
 
 
 @pytest.fixture
-def ia():
-    return InterpretadorFalso()
-
-
-@pytest.fixture
 def api():
     return api_de_demonstracao(RelogioFalso(datetime(2026, 11, 11, 15, 0, tzinfo=FUSO_TERESINA)))
 
 
 @pytest.fixture
-def cliente(tmp_path, api, ia):
-    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia)
+def cliente(tmp_path, api):
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={})
     return TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
 
 
@@ -56,40 +49,23 @@ def test_numero_ficticio_comeca_a_conversa_e_reconhece_a_maria(cliente):
     inicio = iniciar(cliente)
 
     assert "Este número é seu: (00) 90000-0001?" in "\n".join(inicio["mensagens"])
-    assert inicio["ia_ligada"] is True
     assert "Olá, Maria!" in enviar(cliente, inicio["sessao"], "sim")
 
 
 def test_pedido_completo_pela_web(cliente, api):
     sessao = iniciar(cliente)["sessao"]
-    for texto in ("sim", "2", "sim", "1"):
+    for texto in ("sim", "2", "sim", "1", "2"):
         enviar(cliente, sessao, texto)
 
     assert enviar(cliente, sessao, "1").startswith("Pedido registrado!")
     assert len(api.vendas_criadas()) == 1
 
 
-def test_numero_real_e_tratado_como_digitado_e_sem_ia(cliente, api, ia):
-    # V1 + H2: número que não é fictício não revela o cadastro e não usa a IA grátis.
+def test_numero_real_e_tratado_como_digitado(cliente, api):
+    # V1: número que não é fictício não revela o cadastro.
     inicio = iniciar(cliente, REAL)
-    assert inicio["ia_ligada"] is False
-    assert "IA desligada para este número" in inicio["aviso"]
-
     assert "Qual é o seu nome?" in enviar(cliente, inicio["sessao"], "sim")
-    enviar(cliente, inicio["sessao"], "Fulano")
-    enviar(cliente, inicio["sessao"], "manda o de sempre, por favor")  # o roteiro não entende
-
-    assert ia.recebidos == []  # nenhum texto foi para a IA
-    assert api.operacoes == []  # nenhuma busca de cadastro
-
-
-def test_com_numero_ficticio_a_ia_e_usada(cliente, ia):
-    ia.respostas["manda o de sempre"] = Interpretacao(intencao="PEDIR", produto="botijão de gás", quantidade=2)
-    sessao = iniciar(cliente)["sessao"]
-    enviar(cliente, sessao, "sim")
-
-    assert "Entregar em" in enviar(cliente, sessao, "manda o de sempre")
-    assert [t for t, _ in ia.recebidos] == ["manda o de sempre"]
+    assert "buscar_clientes" not in api.operacoes  # nenhuma busca de cadastro
 
 
 @pytest.mark.parametrize("telefone", ["", "abc", "123", "１１９９９９９００００"])
@@ -115,10 +91,11 @@ def test_sessao_e_aleatoria_e_longa(cliente):
 
 def test_mensagem_com_mais_de_500_caracteres_e_recusada(cliente, api):
     sessao = iniciar(cliente)["sessao"]
+    antes = len(api.operacoes)
     resposta = cliente.post(f"/conversas/{sessao}/mensagens", json={"texto": "a" * 501})
 
     assert resposta.status_code == 400
-    assert api.operacoes == []  # nada chegou à conversa
+    assert len(api.operacoes) == antes  # nada chegou à conversa
     assert "Olá, Maria!" in enviar(cliente, sessao, "sim")  # a conversa continua no mesmo passo
 
 
@@ -151,51 +128,32 @@ def test_localhost_tambem_e_aceito(cliente):
     assert resposta.status_code == 200
 
 
-class _IaLenta(InterpretadorFalso):
-    """Conta quantas mensagens estão sendo atendidas ao mesmo tempo."""
-
-    def __init__(self):
-        super().__init__()
-        self._trava = threading.Lock()
-        self.agora = 0
-        self.maximo = 0
-
-    def interpretar(self, texto, contexto):
-        with self._trava:
-            self.agora += 1
-            self.maximo = max(self.maximo, self.agora)
-        time.sleep(0.1)
-        with self._trava:
-            self.agora -= 1
-        return super().interpretar(texto, contexto)  # anota o texto recebido
-
-
 def test_mensagens_ao_mesmo_tempo_sao_atendidas_uma_de_cada_vez(tmp_path, api):
-    ia = _IaLenta()
-    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia)
+    trava = threading.Lock()
+    agora = {"n": 0, "max": 0}
+    original = api.buscar_clientes
+
+    def buscar_lento(tel):
+        with trava:
+            agora["n"] += 1
+            agora["max"] = max(agora["max"], agora["n"])
+        time.sleep(0.05)
+        with trava:
+            agora["n"] -= 1
+        return original(tel)
+
+    api.buscar_clientes = buscar_lento
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={})
     cliente = TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
     sessoes = [iniciar(cliente)["sessao"] for _ in range(2)]
-    for sessao in sessoes:
-        enviar(cliente, sessao, "sim")
 
-    threads = [threading.Thread(target=enviar, args=(cliente, s, "algo que o roteiro não entende")) for s in sessoes]
+    threads = [threading.Thread(target=enviar, args=(cliente, s, "sim")) for s in sessoes]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
-    assert len(ia.recebidos) == 2
-    assert ia.maximo == 1
-
-
-def test_trocar_para_numero_real_no_meio_da_conversa_desliga_a_ia(cliente, ia):
-    # H3: começa com número fictício (IA ligada), o cliente diz "não" e digita um número real.
-    sessao = iniciar(cliente)["sessao"]
-    for texto in ("não", REAL, "sim", "Fulano"):
-        enviar(cliente, sessao, texto)
-    enviar(cliente, sessao, "manda o de sempre, por favor")
-
-    assert ia.recebidos == []
+    assert agora["max"] == 1
 
 
 # --- W3: página do chat, página da fila e o comando que liga o servidor -----------------
@@ -212,21 +170,7 @@ def test_pagina_do_chat(cliente):
     for de_fora in ("<script src", "<link", "http://", "https://", "@import"):
         assert de_fora not in html  # nada carregado de fora: funciona sem internet
     assert "(00) 90000-0001" in html  # dica dos números de demonstração
-
-
-def test_pagina_da_fila_sem_solicitacoes(cliente):
-    resposta = cliente.get("/fila")
-
-    assert resposta.status_code == 200
-    assert "Nenhuma solicitação aberta" in resposta.text
-
-
-def test_pagina_da_fila_mostra_a_transferencia_feita_pela_web(cliente):
-    sessao = iniciar(cliente)["sessao"]
-    enviar(cliente, sessao, "sim")
-    enviar(cliente, sessao, "quero falar com um atendente")
-
-    assert "ATD-" in cliente.get("/fila").text
+    assert "/fila" not in html
 
 
 def test_comando_liga_o_servidor_so_em_127_0_0_1_na_porta_8000(tmp_path):
@@ -250,7 +194,7 @@ def test_comando_aceita_outra_porta_mas_nunca_outro_endereco(tmp_path):
 
 # --- M5 (D16/D17): venda real ligada só com --venda-real --------------------------------
 
-from revgas_chatbot.montagem import ConfigVendaReal, regra_da_ia  # noqa: E402
+from revgas_chatbot.montagem import ConfigVendaReal  # noqa: E402
 
 EQUIPE = "(86) 99999-1111"  # inventado
 CONFIG_REAL = ConfigVendaReal(url="https://api.exemplo.test/v1", chave="chave-ficticia", cliente_demo=5700355)
@@ -262,10 +206,9 @@ AMBIENTE_REAL = {
 
 
 @pytest.fixture
-def real(tmp_path, api, ia):
+def real(tmp_path, api):
     # Modo real com a API falsa no lugar da RevGás (nenhuma chamada sai daqui).
-    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia,
-                      venda_real=CONFIG_REAL, ia_permitida=regra_da_ia([EQUIPE]))
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, venda_real=CONFIG_REAL)
     return TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
 
 
@@ -287,17 +230,18 @@ def test_modo_real_nao_busca_cadastro_e_pede_o_nome(real, api):
     sessao = iniciar(real)["sessao"]
 
     assert "Qual é o seu nome?" in enviar(real, sessao, "sim")
-    assert api.operacoes == []
+    assert "buscar_clientes" not in api.operacoes
 
 
 def test_modo_real_pedido_completo_usa_o_cliente_fixo(real, api):
     sessao = iniciar(real)["sessao"]
-    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "pular", "pular", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "pular", "Centro", "Teresina", "pular", "pular", "1", "2"):
         enviar(real, sessao, texto)
     resposta = enviar(real, sessao, "1")
 
     assert resposta.startswith("Pedido registrado!"), resposta
-    assert api.operacoes == ["criar_venda"]  # nenhuma busca nem cadastro de cliente
+    assert "buscar_clientes" not in api.operacoes and "cadastrar_cliente" not in api.operacoes
+    assert "criar_venda" in api.operacoes
     [venda] = api.vendas_criadas()
     assert venda["customer_id"] == 5700355
     assert venda["broadcast"] == "NONE"
@@ -309,18 +253,6 @@ def test_modo_real_uma_so_api_cadenciada(tmp_path, api):
     programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, venda_real=CONFIG_REAL)
 
     assert programa.dependencias.api is programa.dependencias.registrador._api
-
-
-@pytest.mark.parametrize("numero, usa_ia", [(EQUIPE, True), ("(86) 9999-1111", True), (MARIA, True), (REAL, False)])
-def test_modo_real_ia_so_para_a_equipe(real, ia, numero, usa_ia):
-    # D17b: fictício ou equipe (com ou sem o 9); outro número, só roteiro.
-    inicio = iniciar(real, numero)
-    assert inicio["ia_ligada"] is usa_ia
-    enviar(real, inicio["sessao"], "sim")
-    enviar(real, inicio["sessao"], "Fulano")
-    enviar(real, inicio["sessao"], "manda o de sempre, por favor")
-
-    assert ("manda o de sempre, por favor" in [t for t, _ in ia.recebidos]) is usa_ia
 
 
 def test_comando_com_venda_real_liga_e_avisa(tmp_path, capsys):
@@ -359,7 +291,7 @@ def test_comando_com_venda_real_e_configuracao_errada_nao_liga(tmp_path, mudanca
 
 def test_06_cancelamento_no_chat_web_mostra_o_nome_do_produto(cliente):
     sessao = iniciar(cliente)["sessao"]
-    for texto in ("sim", "3", "sim", "1", "1"):
+    for texto in ("sim", "3", "sim", "1", "2", "1"):
         enviar(cliente, sessao, texto)
 
     enviar(cliente, sessao, "quero cancelar")  # M2: pergunta pelo pedido desta conversa
@@ -375,7 +307,7 @@ def test_venda_real_com_aviso_manda_new_sale(tmp_path, api):
     cliente = TestClient(criar_app(programa, porta=8000, pasta_dados=tmp_path), base_url=BASE)
     inicio = iniciar(cliente)
     assert "AVISA os entregadores" in inicio["aviso"]
-    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "pular", "pular", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "pular", "Centro", "Teresina", "pular", "pular", "1", "2"):
         enviar(cliente, inicio["sessao"], texto)
     enviar(cliente, inicio["sessao"], "1")
 
@@ -386,7 +318,7 @@ def test_venda_real_com_aviso_manda_new_sale(tmp_path, api):
 
 def test_venda_real_sem_a_opcao_continua_none(real, api):
     sessao = iniciar(real)["sessao"]
-    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "Centro", "Teresina", "pular", "pular", "1", "1"):
+    for texto in ("sim", "Fulano", "2", "Rua Inventada", "10", "pular", "Centro", "Teresina", "pular", "pular", "1", "2", "1"):
         enviar(real, sessao, texto)
 
     assert api.vendas_criadas()[0]["broadcast"] == "NONE"

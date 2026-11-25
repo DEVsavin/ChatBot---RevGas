@@ -277,7 +277,7 @@ def test_oi_recebe_a_saudacao_no_mesmo_chat(tmp_path):
 
 def test_pedido_completo_pelo_waha(tmp_path):
     waha = WahaSimulado(tmp_path)
-    respostas = waha.conversa("oi", "sim", "2", "sim", "1", "1")
+    respostas = waha.conversa("oi", "sim", "2", "sim", "1", "2", "1")
     waha.atendimento.desligar()
 
     assert respostas[-1].startswith("Pedido registrado!")
@@ -377,7 +377,7 @@ def test_comando_nao_aceita_outro_endereco(tmp_path):
         main(["--host", "0.0.0.0"], rodar=lambda app, **o: None, pasta_dados=tmp_path, ambiente=AMBIENTE)
 
 
-# --- revisão da spec: I2 (venda real só com "equipe") e I3 (IA só equipe) -----------------
+# --- revisão da spec: I2 (venda real só com "equipe") -----------------
 
 
 def test_venda_real_com_atender_todos_nao_inicia(tmp_path):
@@ -391,14 +391,9 @@ def test_venda_real_com_atender_todos_nao_inicia(tmp_path):
     assert "WAHA_ATENDER=equipe" in str(erro.value)
 
 
-def test_com_atender_todos_a_ia_continua_so_para_a_equipe(tmp_path):
-    from revgas_chatbot.ia.interpretacao import InterpretadorFalso
-    from revgas_chatbot.montagem import regra_da_ia
-
+def test_com_atender_todos_atende_qualquer_numero_pelo_roteiro(tmp_path):
     api = api_de_demonstracao(RelogioFalso(AGORA))
-    ia = InterpretadorFalso()
-    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={}, interpretador=ia,
-                      ia_permitida=regra_da_ia([EQUIPE]))
+    programa = montar(tmp_path, relogio=api.relogio, api=api, ambiente={})
     enviadas = []
     cliente = ClienteWaha("http://127.0.0.1:3000", "chave", "default",
                           transporte=httpx.MockTransport(lambda r: (enviadas.append(r), httpx.Response(201))[1]))
@@ -407,13 +402,12 @@ def test_com_atender_todos_a_ia_continua_so_para_a_equipe(tmp_path):
                          atende=lambda n: True, relogio=api.relogio)  # "todos"
     http = TestClient(app, base_url=BASE)
     atendimento.ligar()
-    for texto in ("oi", "sim", "Fulano", "manda o de sempre, por favor"):
+    for texto in ("oi", "sim", "Fulano"):
         postar(http, evento(texto, de=f"{OUTRO}@c.us"))
         atendimento.esperar()
     atendimento.desligar()
 
-    assert len(enviadas) > 0  # foi atendido (só pelo roteiro)
-    assert ia.recebidos == []
+    assert len(enviadas) > 0
 
 
 # --- devolução na conversa (fase C) de ponta a ponta pelo WAHA simulado -------------------
@@ -421,7 +415,7 @@ def test_com_atender_todos_a_ia_continua_so_para_a_equipe(tmp_path):
 
 def test_cancelamento_pelo_waha_com_resumo_confirmacao_e_fila(tmp_path):
     waha = WahaSimulado(tmp_path)
-    respostas = waha.conversa("oi", "sim", "2", "sim", "1", "1")  # um pedido registrado
+    respostas = waha.conversa("oi", "sim", "2", "sim", "1", "2", "1")  # um pedido registrado
     assert respostas[-1].startswith("Pedido registrado!")
     operacoes_antes = len(waha.api.operacoes)
 
@@ -430,10 +424,8 @@ def test_cancelamento_pelo_waha_com_resumo_confirmacao_e_fila(tmp_path):
     final = waha.conversa("1")[-1]
     waha.atendimento.desligar()
 
-    assert "protocolo DEV-" in final
-    novas = waha.api.operacoes[operacoes_antes:]
-    assert set(novas) <= {"buscar_clientes", "buscar_vendas"}  # a devolução só leu o ERP
-    assert "CANCELAMENTO" in (tmp_path / "fila.html").read_text(encoding="utf-8")
+    assert "ERP-" in final
+    assert "[CHATBOT][CANCELAMENTO]" in waha.api.vendas_criadas()[0]["observation"]
 
 
 # --- Avisar os entregadores (pedido de 18/11) ------------------------------------------------

@@ -3,69 +3,742 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chat de teste — revenda de gás</title>
+<title>Chatbot RevGás — WhatsApp Web &amp; Monitor de APIs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --fundo: #f4f5f7; --cartao: #fff; --texto: #1f2328; --suave: #5b636d; --cliente: #dcf3e3;
-          --chatbot: #fff; --borda: #d0d4da; --destaque: #b45309; --erro: #b00020; }
-  @media (prefers-color-scheme: dark) {
-    :root { --fundo: #15171a; --cartao: #1e2125; --texto: #e6e8eb; --suave: #a0a7b0; --cliente: #1f3b2a;
-            --chatbot: #262a2f; --borda: #3a3f46; --destaque: #f59e0b; --erro: #ff6b81; }
+  :root {
+    --pagina-fundo: #eae6df;
+    --cartao: #ffffff;
+    --texto: #111b21;
+    --suave: #667781;
+    --borda: #d1d7db;
+
+    /* Cores oficiais do WhatsApp Web (tema claro) */
+    --wa-header: #008069;
+    --wa-header-texto: #ffffff;
+    --wa-header-sub: rgba(255, 255, 255, 0.82);
+    --wa-barra: #f0f2f5;
+    --wa-chat-fundo: #efeae2;
+    --wa-chat-padrao: rgba(17, 27, 33, 0.04);
+    --wa-bolha-in: #ffffff;
+    --wa-bolha-out: #d9fdd3;
+    --wa-sombra-bolha: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+    --wa-hora: #667781;
+    --wa-check: #53bdeb;
+    --wa-acao: #00a884;
+    --wa-acao-hover: #008f72;
+    --wa-input-fundo: #ffffff;
+    --wa-aviso-fundo: #fff5c4;
+    --wa-aviso-texto: #54656f;
+
+    /* Monitor de APIs */
+    --painel-fundo: #f8f9fa;
+    --erro: #dc2626;
+    --ok: #15803d;
+    --get: #2563eb;
+    --post: #008069;
+    --put: #d97706;
   }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --pagina-fundo: #0c1317;
+      --cartao: #111b21;
+      --texto: #e9edef;
+      --suave: #8696a0;
+      --borda: #2a3942;
+
+      /* Cores oficiais do WhatsApp Web (tema escuro) */
+      --wa-header: #202c33;
+      --wa-header-texto: #e9edef;
+      --wa-header-sub: #8696a0;
+      --wa-barra: #202c33;
+      --wa-chat-fundo: #0b141a;
+      --wa-chat-padrao: rgba(233, 237, 239, 0.03);
+      --wa-bolha-in: #202c33;
+      --wa-bolha-out: #005c4b;
+      --wa-sombra-bolha: 0 1px 0.5px rgba(0, 0, 0, 0.35);
+      --wa-hora: rgba(233, 237, 239, 0.65);
+      --wa-check: #53bdeb;
+      --wa-acao: #00a884;
+      --wa-acao-hover: #06cf9c;
+      --wa-input-fundo: #2a3942;
+      --wa-aviso-fundo: #182229;
+      --wa-aviso-texto: #ffd279;
+
+      --painel-fundo: #111b21;
+      --erro: #f87171;
+      --ok: #4ade80;
+      --get: #60a5fa;
+      --post: #00a884;
+      --put: #fbbf24;
+    }
+  }
+
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, sans-serif; background: var(--fundo); color: var(--texto); }
-  main { max-width: 42rem; margin: 0 auto; padding: 1rem; display: flex; flex-direction: column; min-height: 100vh; }
-  header h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
-  .nota { color: var(--suave); font-size: .9rem; margin: .25rem 0; }
-  .aviso { color: var(--destaque); font-size: .9rem; margin: .5rem 0; }
-  .erro { color: var(--erro); font-size: .9rem; margin: .5rem 0; min-height: 1.2em; }
-  form { display: flex; gap: .5rem; margin: .5rem 0; }
-  input { flex: 1; padding: .6rem .7rem; font-size: 1rem; border: 1px solid var(--borda); border-radius: 8px;
-          background: var(--cartao); color: var(--texto); }
-  button { padding: .6rem 1rem; font-size: 1rem; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
-  button:disabled, input:disabled { opacity: .5; cursor: default; }
-  #conversa { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .5rem; padding: .5rem 0; }
-  .msg { max-width: 85%; padding: .55rem .75rem; border-radius: 10px; border: 1px solid var(--borda);
-         white-space: pre-wrap; word-wrap: break-word; }
-  .chatbot { align-self: flex-start; background: var(--chatbot); }
-  .cliente { align-self: flex-end; background: var(--cliente); }
-  a { color: inherit; }
+
+  body {
+    margin: 0;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--pagina-fundo);
+    color: var(--texto);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  input, button {
+    font-family: inherit;
+  }
+
+  .layout {
+    max-width: 86rem;
+    margin: 0 auto;
+    padding: 1rem;
+    gap: 1rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
+    min-height: 100vh;
+    align-items: stretch;
+  }
+
+  @media (max-width: 920px) {
+    .layout { grid-template-columns: 1fr; padding: .6rem; }
+  }
+
+  .coluna {
+    background: var(--cartao);
+    border: 1px solid var(--borda);
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: calc(100vh - 2rem);
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(11, 20, 26, 0.08);
+  }
+
+  /* ---- Cabeçalho estilo WhatsApp Web ---- */
+  .wa-header {
+    background: var(--wa-header);
+    color: var(--wa-header-texto);
+    padding: .7rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-shrink: 0;
+  }
+
+  .wa-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.16);
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    font-weight: 700;
+    font-size: .95rem;
+    letter-spacing: -.02em;
+    color: #fff;
+  }
+
+  .wa-header-info {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .wa-header-info h1 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.25;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+
+  .wa-status {
+    font-size: .78rem;
+    color: var(--wa-header-sub);
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    margin-top: .1rem;
+  }
+
+  .wa-online-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #25d366;
+    display: inline-block;
+  }
+
+  .badge {
+    font-size: .68rem;
+    font-weight: 600;
+    padding: .16rem .52rem;
+    border-radius: 999px;
+    letter-spacing: .02em;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    color: var(--wa-header-texto);
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .badge-real {
+    background: rgba(37, 211, 102, 0.22);
+    border-color: rgba(37, 211, 102, 0.75);
+    color: #ffffff;
+  }
+
+  .coluna-api .badge {
+    border-color: var(--borda);
+    color: var(--suave);
+    background: var(--cartao);
+  }
+
+  /* ---- Barra de telefone (iniciar conversa) ---- */
+  .wa-telefone-bar {
+    background: var(--wa-barra);
+    border-bottom: 1px solid var(--borda);
+    padding: .55rem .9rem;
+    flex-shrink: 0;
+  }
+
+  .wa-telefone-bar form {
+    display: flex;
+    gap: .5rem;
+    align-items: center;
+    margin: 0;
+  }
+
+  .wa-telefone-bar input {
+    flex: 1;
+    padding: .52rem .85rem;
+    font-size: .88rem;
+    border: 1px solid transparent;
+    border-radius: 20px;
+    background: var(--wa-input-fundo);
+    color: var(--texto);
+    outline: none;
+    transition: border-color .15s;
+  }
+
+  .wa-telefone-bar input:focus {
+    border-color: var(--wa-acao);
+  }
+
+  .wa-telefone-bar button {
+    padding: .52rem 1rem;
+    font-size: .86rem;
+    font-weight: 600;
+    border: 0;
+    border-radius: 20px;
+    background: var(--wa-acao);
+    color: #fff;
+    cursor: pointer;
+    transition: background .15s;
+  }
+
+  .wa-telefone-bar button:hover {
+    background: var(--wa-acao-hover);
+  }
+
+  /* ---- Área de mensagens estilo WhatsApp Web ---- */
+  .wa-area-chat {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--wa-chat-fundo);
+    background-image:
+      radial-gradient(var(--wa-chat-padrao) 1.5px, transparent 1.5px),
+      radial-gradient(var(--wa-chat-padrao) 1.5px, transparent 1.5px);
+    background-size: 28px 28px;
+    background-position: 0 0, 14px 14px;
+    position: relative;
+  }
+
+  .aviso {
+    align-self: center;
+    max-width: 90%;
+    margin: .65rem .8rem .1rem;
+    padding: .38rem .75rem;
+    border-radius: 8px;
+    background: var(--wa-aviso-fundo);
+    color: var(--wa-aviso-texto);
+    font-size: .76rem;
+    font-weight: 500;
+    text-align: center;
+    line-height: 1.35;
+    box-shadow: 0 1px 0.5px rgba(11, 20, 26, 0.1);
+  }
+
+  #conversa {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+    padding: .85rem 1.2rem 1rem;
+    scroll-behavior: smooth;
+  }
+
+  #conversa::-webkit-scrollbar,
+  #lista-api::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  #conversa::-webkit-scrollbar-thumb,
+  #lista-api::-webkit-scrollbar-thumb {
+    background: rgba(134, 150, 160, 0.35);
+    border-radius: 999px;
+  }
+
+  .msg {
+    position: relative;
+    max-width: 78%;
+    padding: .46rem .68rem .38rem;
+    font-size: .9rem;
+    line-height: 1.42;
+    box-shadow: var(--wa-sombra-bolha);
+    word-wrap: break-word;
+    animation: surgir .14s ease-out;
+  }
+
+  @keyframes surgir {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg-texto {
+    white-space: pre-wrap;
+  }
+
+  .msg-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .24rem;
+    margin-top: .18rem;
+    font-size: .68rem;
+    color: var(--wa-hora);
+    user-select: none;
+  }
+
+  .msg-check {
+    width: 15px;
+    height: 11px;
+    fill: var(--wa-check);
+    flex-shrink: 0;
+  }
+
+  .chatbot {
+    align-self: flex-start;
+    background: var(--wa-bolha-in);
+    color: var(--texto);
+    border-radius: 0 8px 8px 8px;
+  }
+
+  .chatbot::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -7px;
+    width: 0;
+    height: 0;
+    border-top: 8px solid var(--wa-bolha-in);
+    border-left: 8px solid transparent;
+  }
+
+  .cliente {
+    align-self: flex-end;
+    background: var(--wa-bolha-out);
+    color: var(--texto);
+    border-radius: 8px 0 8px 8px;
+  }
+
+  .cliente::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: -7px;
+    width: 0;
+    height: 0;
+    border-top: 8px solid var(--wa-bolha-out);
+    border-right: 8px solid transparent;
+  }
+
+  /* ---- Botões de resposta rápida estilo WhatsApp ---- */
+  .opcoes {
+    align-self: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    margin: .15rem 0 .25rem;
+  }
+
+  .btn-opcao {
+    padding: .42rem .85rem;
+    font-size: .84rem;
+    font-weight: 500;
+    border: 0;
+    border-radius: 8px;
+    background: var(--wa-bolha-in);
+    color: var(--wa-acao);
+    cursor: pointer;
+    box-shadow: var(--wa-sombra-bolha);
+    transition: background .15s, transform .1s;
+  }
+
+  .btn-opcao:hover {
+    background: var(--wa-bolha-out);
+    transform: translateY(-1px);
+  }
+
+  .erro {
+    color: var(--erro);
+    font-size: .8rem;
+    font-weight: 500;
+    margin: 0;
+    padding: 0 1rem;
+    min-height: 0;
+  }
+
+  .erro:not(:empty) {
+    padding: .35rem 1rem;
+    background: var(--wa-barra);
+  }
+
+  /* ---- Rodapé de digitação estilo WhatsApp Web ---- */
+  #envio {
+    background: var(--wa-barra);
+    border-top: 1px solid var(--borda);
+    padding: .6rem .9rem;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin: 0;
+    flex-shrink: 0;
+  }
+
+  #envio[hidden] {
+    display: none;
+  }
+
+  #envio input {
+    flex: 1;
+    padding: .62rem 1rem;
+    font-size: .92rem;
+    border: 0;
+    border-radius: 24px;
+    background: var(--wa-input-fundo);
+    color: var(--texto);
+    outline: none;
+    box-shadow: 0 1px 1px rgba(11, 20, 26, 0.06);
+  }
+
+  #envio input::placeholder,
+  .wa-telefone-bar input::placeholder {
+    color: var(--suave);
+  }
+
+  .btn-enviar {
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--wa-acao);
+    color: #fff;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    transition: background .15s, transform .1s;
+  }
+
+  .btn-enviar:hover {
+    background: var(--wa-acao-hover);
+  }
+
+  .btn-enviar:active {
+    transform: scale(0.95);
+  }
+
+  .btn-enviar svg {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+    transform: translateX(1px);
+  }
+
+  button:disabled, input:disabled {
+    opacity: .55;
+    cursor: default;
+  }
+
+  /* ---- Painel lateral: Monitor de APIs RevGás ---- */
+  .coluna-api {
+    background: var(--painel-fundo);
+  }
+
+  .api-header {
+    background: var(--wa-barra);
+    border-bottom: 1px solid var(--borda);
+    padding: .85rem 1rem;
+    flex-shrink: 0;
+  }
+
+  .api-topo {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+  }
+
+  .api-topo h2 {
+    font-size: .96rem;
+    font-weight: 600;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+  }
+
+  .pulso {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--wa-acao);
+    display: inline-block;
+    box-shadow: 0 0 0 3px rgba(0, 168, 132, 0.2);
+  }
+
+  .nota {
+    color: var(--suave);
+    font-size: .78rem;
+    margin: .3rem 0 0;
+    line-height: 1.35;
+  }
+
+  button.sec {
+    background: var(--cartao);
+    color: var(--suave);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    padding: .3rem .65rem;
+    font-size: .76rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+
+  button.sec:hover {
+    color: var(--texto);
+    border-color: var(--suave);
+  }
+
+  #lista-api {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    padding: .8rem;
+  }
+
+  .api-card {
+    background: var(--cartao);
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    padding: .62rem .75rem;
+    font-size: .82rem;
+  }
+
+  .api-linha {
+    display: flex;
+    align-items: center;
+    gap: .42rem;
+    flex-wrap: wrap;
+  }
+
+  .metodo {
+    font-weight: 700;
+    font-size: .7rem;
+    padding: .12rem .42rem;
+    border-radius: 4px;
+    color: #fff;
+    letter-spacing: .03em;
+  }
+
+  .m-GET { background: var(--get); }
+  .m-POST { background: var(--post); }
+  .m-PUT { background: var(--put); }
+
+  .status-ok { color: var(--ok); font-weight: 700; }
+  .status-err { color: var(--erro); font-weight: 700; }
+
+  .api-url {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    word-break: break-all;
+    font-size: .76rem;
+    margin-top: .25rem;
+    color: var(--texto);
+  }
+
+  .api-meta {
+    color: var(--suave);
+    font-size: .73rem;
+    margin-left: auto;
+  }
+
+  .api-resumo {
+    color: var(--suave);
+    margin-top: .25rem;
+    font-size: .79rem;
+  }
+
+  details { margin-top: .35rem; }
+  summary {
+    cursor: pointer;
+    color: var(--wa-acao);
+    font-size: .75rem;
+    font-weight: 500;
+  }
+
+  pre {
+    margin: .35rem 0 0;
+    padding: .5rem;
+    border-radius: 6px;
+    background: var(--painel-fundo);
+    border: 1px solid var(--borda);
+    overflow-x: auto;
+    font-size: .72rem;
+    max-height: 12rem;
+  }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Chat de teste — revenda de gás</h1>
-    <p class="nota">Demonstração: use os números fictícios <strong>(00) 90000-0001</strong> (cliente cadastrada)
-      ou <strong>(00) 90000-0002</strong> (sem cadastro). Nenhuma venda vai para o sistema de verdade.</p>
-    <p class="nota"><a href="/fila" target="_blank" rel="noopener">Ver a fila da equipe</a> (abre em outra aba; recarregue para atualizar)</p>
-  </header>
+<div class="layout">
+  <section class="coluna">
+    <header class="wa-header">
+      <div class="wa-avatar" aria-hidden="true">RG</div>
+      <div class="wa-header-info">
+        <h1>
+          RevGás Atendimento
+          <span id="modo-badge" class="badge">Carregando...</span>
+        </h1>
+        <div class="wa-status">
+          <span class="wa-online-dot"></span>
+          <span>online · atendimento automático</span>
+        </div>
+      </div>
+    </header>
 
-  <form id="inicio">
-    <input id="telefone" placeholder="Telefone de demonstração, ex.: (00) 90000-0001" autocomplete="off" required>
-    <button type="submit">Começar</button>
-  </form>
+    <div class="wa-telefone-bar">
+      <form id="inicio">
+        <input id="telefone" placeholder="Digite seu WhatsApp com DDD (ex.: 86999990001)" autocomplete="off" required>
+        <button type="submit">Começar</button>
+      </form>
+    </div>
 
-  <p id="ia" class="nota" hidden></p>
-  <p id="aviso" class="aviso" hidden></p>
-  <div id="conversa" role="log" aria-live="polite"></div>
-  <p id="erro" class="erro" role="alert"></p>
+    <div class="wa-area-chat">
+      <p id="aviso" class="aviso" hidden></p>
+      <div id="conversa" role="log" aria-live="polite"></div>
+      <p id="erro" class="erro" role="alert"></p>
+    </div>
 
-  <form id="envio" hidden>
-    <input id="texto" placeholder="Escreva sua mensagem" autocomplete="off" maxlength="500" required>
-    <button type="submit">Enviar</button>
-  </form>
-</main>
+    <form id="envio" hidden>
+      <input id="texto" placeholder="Mensagem" autocomplete="off" maxlength="500" required>
+      <button type="submit" class="btn-enviar" aria-label="Enviar mensagem" title="Enviar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </form>
+  </section>
+
+  <aside class="coluna coluna-api">
+    <div class="api-header">
+      <div class="api-topo">
+        <h2><span class="pulso"></span> APIs RevGás em tempo real <span id="contador-api" class="badge">0</span></h2>
+        <button id="limpar-api" type="button" class="sec">Limpar</button>
+      </div>
+      <p class="nota">Cada requisição HTTP enviada ao ERP RevGás aparece aqui na hora (sem expor a chave).</p>
+    </div>
+    <div id="lista-api" aria-live="polite"></div>
+  </aside>
+</div>
 
 <script>
   "use strict";
   const $ = (id) => document.getElementById(id);
   let sessao = null;
+  let ultimoIdApi = -1;
+
+  function horaAtual() {
+    const agora = new Date();
+    return agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function removerOpcoes() {
+    document.querySelectorAll(".opcoes").forEach((el) => el.remove());
+  }
+
+  function adicionarOpcoes(lista) {
+    const box = document.createElement("div");
+    box.className = "opcoes";
+    lista.forEach((rotulo) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn-opcao";
+      btn.textContent = rotulo;
+      btn.addEventListener("click", () => enviarTexto(rotulo));
+      box.appendChild(btn);
+    });
+    $("conversa").appendChild(box);
+  }
+
+  function criarDoubleCheck() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 16 11");
+    svg.setAttribute("class", "msg-check");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute(
+      "d",
+      "M11.071.653a.457.457 0 0 0-.304-.102.493.493 0 0 0-.381.178l-6.19 7.636-2.405-2.272a.463.463 0 0 0-.336-.146.47.47 0 0 0-.343.146l-.311.31a.445.445 0 0 0-.14.337c0 .136.047.25.14.343l2.996 2.996a.724.724 0 0 0 .501.203.697.697 0 0 0 .546-.266l6.646-8.417a.497.497 0 0 0 .108-.299.441.441 0 0 0-.19-.374l-.337-.273zm3.627 0a.457.457 0 0 0-.304-.102.493.493 0 0 0-.381.178l-6.19 7.636-1.2-1.134-.65.802 1.464 1.465a.724.724 0 0 0 .501.203.697.697 0 0 0 .546-.266l6.646-8.417a.497.497 0 0 0 .108-.299.441.441 0 0 0-.19-.374l-.34-.273z"
+    );
+    svg.appendChild(path);
+    return svg;
+  }
 
   function mostrar(texto, quem) {
     const div = document.createElement("div");
     div.className = "msg " + quem;
-    div.textContent = texto; // sempre texto: nada do que chega vira código
+
+    const corpo = document.createElement("div");
+    corpo.className = "msg-texto";
+    corpo.textContent = texto; // sempre texto: nada do que chega vira código
+    div.appendChild(corpo);
+
+    const meta = document.createElement("div");
+    meta.className = "msg-meta";
+    const hora = document.createElement("span");
+    hora.textContent = horaAtual();
+    meta.appendChild(hora);
+    if (quem === "cliente") {
+      meta.appendChild(criarDoubleCheck());
+    }
+    div.appendChild(meta);
+
     $("conversa").appendChild(div);
+    if (quem === "chatbot" && texto.includes("0) Não tem / Pular etapa")) {
+      adicionarOpcoes(["Não tem / Pular etapa"]);
+    } else if (quem === "chatbot" && texto.includes("O pagamento no PIX será:")) {
+      adicionarOpcoes(["Pagar agora", "Pagar na entrega"]);
+    }
     $("conversa").scrollTop = $("conversa").scrollHeight;
   }
 
@@ -82,29 +755,99 @@
     return corpo;
   }
 
-  $("inicio").addEventListener("submit", async (evento) => {
-    evento.preventDefault();
-    mostrarErro("");
-    try {
-      const corpo = await postar("/conversas", { telefone: $("telefone").value });
-      sessao = corpo.sessao;
-      $("conversa").replaceChildren();
-      $("ia").textContent = corpo.ia_ligada ? "IA ligada nesta conversa." : "IA desligada nesta conversa.";
-      $("ia").hidden = false;
-      $("aviso").textContent = corpo.aviso || "";
-      $("aviso").hidden = !corpo.aviso;
-      corpo.mensagens.forEach((m) => mostrar(m, "chatbot"));
-      $("envio").hidden = false;
-      $("texto").focus();
-    } catch (falha) {
-      mostrarErro(falha.message);
-    }
-  });
+  function montarUrlComParams(ev) {
+    const chaves = Object.keys(ev.params || {});
+    if (!chaves.length) return ev.url;
+    const qs = chaves.map((k) => k + "=" + ev.params[k]).join("&");
+    return ev.url + "?" + qs;
+  }
 
-  $("envio").addEventListener("submit", async (evento) => {
-    evento.preventDefault();
-    const texto = $("texto").value;
+  function renderizarLogs(dados) {
+    const badge = $("modo-badge");
+    if (dados.venda_real) {
+      badge.textContent = "API REAL LIGADA";
+      badge.className = "badge badge-real";
+    } else {
+      badge.textContent = "Modo demonstração";
+      badge.className = "badge";
+    }
+    const logs = dados.logs || [];
+    $("contador-api").textContent = String(logs.length);
+    const topoId = logs.length ? logs[0].id : 0;
+    if (topoId === ultimoIdApi) return;
+    ultimoIdApi = topoId;
+
+    const lista = $("lista-api");
+    lista.replaceChildren();
+    if (!logs.length) {
+      const vazio = document.createElement("p");
+      vazio.className = "nota";
+      vazio.textContent = "Nenhuma chamada HTTP registrada ainda.";
+      lista.appendChild(vazio);
+      return;
+    }
+    logs.forEach((ev) => {
+      const card = document.createElement("div");
+      card.className = "api-card";
+
+      const linha = document.createElement("div");
+      linha.className = "api-linha";
+
+      const met = document.createElement("span");
+      met.className = "metodo m-" + ev.metodo;
+      met.textContent = ev.metodo;
+      linha.appendChild(met);
+
+      const st = document.createElement("span");
+      const ok = typeof ev.status === "number" && ev.status >= 200 && ev.status < 300;
+      st.className = ok ? "status-ok" : "status-err";
+      st.textContent = String(ev.status);
+      linha.appendChild(st);
+
+      const meta = document.createElement("span");
+      meta.className = "api-meta";
+      meta.textContent = ev.hora + " · " + ev.duracao_ms + " ms";
+      linha.appendChild(meta);
+
+      card.appendChild(linha);
+
+      const urlDiv = document.createElement("div");
+      urlDiv.className = "api-url";
+      urlDiv.textContent = montarUrlComParams(ev);
+      card.appendChild(urlDiv);
+
+      const resDiv = document.createElement("div");
+      resDiv.className = "api-resumo";
+      resDiv.textContent = ev.resumo;
+      card.appendChild(resDiv);
+
+      if (ev.enviado || ev.recebido) {
+        const det = document.createElement("details");
+        const sum = document.createElement("summary");
+        sum.textContent = "Ver payload / resposta JSON";
+        det.appendChild(sum);
+        const pre = document.createElement("pre");
+        const bloco = {};
+        if (ev.enviado) bloco.enviado = ev.enviado;
+        if (ev.recebido) bloco.recebido = ev.recebido;
+        pre.textContent = JSON.stringify(bloco, null, 2);
+        det.appendChild(pre);
+        card.appendChild(det);
+      }
+      lista.appendChild(card);
+    });
+  }
+
+  async function atualizarLogs() {
+    try {
+      const r = await fetch("/api-logs");
+      if (r.ok) renderizarLogs(await r.json());
+    } catch (_) {}
+  }
+
+  async function enviarTexto(texto) {
     if (!sessao || !texto.trim()) return;
+    removerOpcoes();
     mostrarErro("");
     mostrar(texto, "cliente");
     $("texto").value = "";
@@ -117,8 +860,44 @@
     } finally {
       $("texto").disabled = false;
       $("texto").focus();
+      atualizarLogs();
+    }
+  }
+
+  $("inicio").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    mostrarErro("");
+    try {
+      const corpo = await postar("/conversas", { telefone: $("telefone").value });
+      sessao = corpo.sessao;
+      $("conversa").replaceChildren();
+      $("aviso").textContent = corpo.aviso || "";
+      $("aviso").hidden = !corpo.aviso;
+      corpo.mensagens.forEach((m) => mostrar(m, "chatbot"));
+      $("envio").hidden = false;
+      $("texto").placeholder = "Digite uma mensagem (ex.: oi)";
+      $("texto").focus();
+      atualizarLogs();
+    } catch (falha) {
+      mostrarErro(falha.message);
     }
   });
+
+  $("envio").addEventListener("submit", async (evento) => {
+    evento.preventDefault();
+    await enviarTexto($("texto").value);
+  });
+
+  $("limpar-api").addEventListener("click", async () => {
+    try {
+      await postar("/api-logs/limpar", {});
+      ultimoIdApi = -1;
+      atualizarLogs();
+    } catch (_) {}
+  });
+
+  atualizarLogs();
+  setInterval(atualizarLogs, 2000);
 </script>
 </body>
 </html>

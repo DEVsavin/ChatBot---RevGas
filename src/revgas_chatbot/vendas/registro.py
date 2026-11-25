@@ -20,11 +20,10 @@ from revgas_chatbot.api_revgas.api import ApiRevGas, Relogio, Resposta, TempoEsg
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 import logging
 
-from revgas_chatbot.atendimento.atendimento import TransferirAtendente
-from revgas_chatbot.atendimento.fila import mascarar
+from revgas_chatbot.atendimento.atendimento import TransferirAtendente, mascarar
 from revgas_chatbot.conversa.estados import nome_do_estado
 from revgas_chatbot.vendas.pedido import ForaDoCatalogo, Invalido, Pedido, Problema, ProdutoCatalogo, validar
-from revgas_chatbot.vendas.venda import CANAL, marca, montar_corpo_venda
+from revgas_chatbot.vendas.venda import CANAL, complemento_com_quadra, marca, marca_telefone, montar_corpo_venda
 
 
 @dataclass(frozen=True)
@@ -143,8 +142,9 @@ def dados_do_cliente(pedido: Pedido) -> dict[str, Any]:
         "city": endereco.cidade.strip(),
         "state_federation": nome_do_estado(endereco.estado) or endereco.estado.strip(),
     }
-    if endereco.complemento and endereco.complemento.strip():
-        dados["complement"] = endereco.complemento.strip()
+    complemento = complemento_com_quadra(endereco)
+    if complemento:
+        dados["complement"] = complemento
     if endereco.referencia and endereco.referencia.strip():
         dados["landmark"] = endereco.referencia.strip()
     return dados
@@ -212,8 +212,10 @@ class RegistradorDeVendas:
             customer_id = self._garantir_cliente(pedido)
             real = self._venda_real
             corpo = montar_corpo_venda(
-                # Modo real: a observação vira só o aviso (+ troco + marca, que a montagem põe).
-                pedido if real is None else replace(pedido, observacao=real.aviso),
+                # Modo real: a observação leva o aviso + hash anônimo do telefone (+ troco/PIX + marca).
+                pedido
+                if real is None
+                else replace(pedido, observacao=f"{real.aviso} {marca_telefone(pedido.telefone)}"),
                 customer_id=customer_id,
                 catalogo=self._catalogo,
                 establishment_id=self._establishment_id,
@@ -313,6 +315,13 @@ class RegistradorDeVendas:
             problemas = _problemas_do_cliente(resposta.dados)
             if problemas:
                 raise _Parar(PedidoInvalido(problemas))
+            mensagem_400 = (_mensagem_da_api(resposta.dados) or "").lower()
+            if resposta.status == 400 and ("vale" in mensagem_400 or "serial" in mensagem_400):
+                raise _Parar(
+                    PedidoInvalido(
+                        (Problema("serial", "o código do vale-gás não é válido ou já foi utilizado"),)
+                    )
+                )
         motivo = f"erro HTTP {resposta.status} ao {etapa}"
         mensagem = _mensagem_da_api(resposta.dados)
         if mensagem:

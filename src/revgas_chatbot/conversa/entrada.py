@@ -66,8 +66,24 @@ def normalizar(texto: str) -> str:
     return " ".join(sem_acento.casefold().split()).strip(" .,!?;:")
 
 
-_SIM = frozenset({"sim", "s", "isso", "pode", "confirmo"})
-_NAO = frozenset({"nao", "n"})
+_SIM = frozenset({
+    "sim", "s", "isso", "pode", "confirmo", "ok", "okay", "beleza", "blz", "certo",
+    "fechou", "positivo", "exato", "correto", "pode ser", "pode mandar", "com certeza",
+    "sim senhor", "sim senhora", "bora", "manda", "claro", "uhum",
+})
+_NAO = frozenset({
+    "nao", "n", "negativo", "errado", "nao e", "nops", "nem", "outro", "outra",
+})
+_PULAR = frozenset({
+    "0", "0)", "pular", "pular etapa", "nao", "n", "nao tem", "nao tem / pular etapa",
+    "nao tem / pular", "0) nao tem / pular etapa", "sem", "nenhum", "nenhuma",
+    "nao possui", "sem quadra", "sem complemento", "sem referencia",
+})
+
+
+def quer_pular(texto: str) -> bool:
+    """True quando o cliente quer pular um campo opcional (quadra, complemento, referência)."""
+    return normalizar(texto) in _PULAR
 
 
 def sim_ou_nao(texto: str) -> bool | None:
@@ -81,8 +97,10 @@ def sim_ou_nao(texto: str) -> bool | None:
 
 
 def opcao(texto: str, opcoes: list[str]) -> int | None:
-    """Índice (a partir de 0) da opção escolhida pelo número ("2", "2)") ou pelo texto."""
-    resposta = normalizar(texto).rstrip(")")
+    """Índice (a partir de 0) da opção escolhida pelo número ("2", "2)", "opção 2") ou pelo texto."""
+    resposta = normalizar(texto).rstrip(").- ")
+    if resposta.startswith("opcao "):
+        resposta = resposta[len("opcao "):].strip()
     if resposta.isdigit():
         numero = int(resposta)
         return numero - 1 if 1 <= numero <= len(opcoes) else None
@@ -111,13 +129,28 @@ def valor_em_reais(texto: str) -> Decimal | None:
     return valor if valor > 0 else None
 
 
-# Comandos que valem em qualquer passo (lista inicial; será substituída no C2).
+# Comandos que valem em qualquer passo (chatbot puro, sem LLM).
 # Casam só como palavra ou frase INTEIRA, já normalizadas (sem acento).
-_VAZAMENTO = ("vazamento", "vazando", "cheiro de gas", "cheirando gas")
+_VAZAMENTO = ("vazamento", "vazando", "cheiro de gas", "cheirando gas", "escapando gas", "gas escapando")
 _COMANDOS = {
     "CANCELAR_OU_DEVOLVER": ("cancelar", "cancela", "devolver", "devolucao", "estorno", "reembolso"),
-    "ATENDENTE": ("atendente", "humano", "pessoa"),
-    "SAIR": ("sair", "parar", "tchau"),
+    "ACOMPANHAR_PEDIDO": (
+        "onde esta meu pedido", "onde ta meu pedido", "cade meu pedido", "cade meu gas",
+        "status do pedido", "acompanhar pedido", "acompanhar", "andamento do pedido",
+        "ja saiu", "ta demorando", "esta demorando", "previsao de entrega", "status",
+    ),
+    "MEUS_PEDIDOS": ("meus pedidos", "ver pedidos", "ultimos pedidos", "historico", "historico de pedidos"),
+    "REPETIR_PEDIDO": (
+        "repetir pedido", "repetir ultimo pedido", "repetir o ultimo pedido",
+        "repetir", "mesmo de sempre", "o de sempre", "mesmo pedido",
+    ),
+    "CONSULTAR_PRECO": (
+        "quanto custa", "quanto ta", "quanto e o gas", "qual o preco", "qual o valor",
+        "preco do gas", "valor do gas", "preco", "formas de pagamento",
+        "aceita vale", "aceita cartao", "aceita pix",
+    ),
+    "ATENDENTE": ("atendente", "humano", "pessoa", "falar com alguem", "falar com atendente"),
+    "SAIR": ("sair", "parar", "tchau", "encerrar"),
 }
 
 
@@ -161,7 +194,11 @@ def pergunta_ou_nao_sei(texto: str) -> bool:
     return any(mensagem == p or mensagem.startswith(p + " ") for p in _DUVIDA)
 
 
-_SEM_NUMERO = frozenset({"s/n", "sn", "s n", "sem numero", "n", "s.n", "s.n.", "s n.", "sem n"})  # ticket 02
+_SEM_NUMERO = frozenset({
+    "0", "0)", "s/n", "sn", "s n", "sem numero", "n", "s.n", "s.n.", "s n.", "sem n",
+    "nao tem", "pular", "pular etapa", "nao tem / pular etapa", "nao tem / pular",
+    "0) nao tem / pular etapa",
+})
 
 
 def fala_de_apartamento(texto: str) -> bool:
@@ -248,7 +285,10 @@ def pedido_de_devolucao(texto: str) -> PedidoDeDevolucao | None:
 # Ticket 01 (achados de 18/11): sem IA, a resposta à rua às vezes é o endereço inteiro.
 # I1 da revisão: sem vírgula, só palavras de pagamento marcam o endereço inteiro;
 # "bairro"/"cidade"/"cep" só contam junto com um número ("Rua Cidade Nova" é rua).
-_PAGAMENTO_NO_TEXTO = ("pagar", "pagamento", "pago", "pix", "credito", "debito", "cartao", "dinheiro")
+_PAGAMENTO_NO_TEXTO = (
+    "pagar", "pagamento", "pago", "pix", "credito", "debito", "cartao", "dinheiro", "especie",
+    "vale gas", "valegas", "vale-gas",
+)
 _LUGAR_NO_TEXTO = ("bairro", "cidade", "cep")
 _PREPOSICOES_DA_RUA = ("fica na ", "fica no ", "e na ", "e no ", "na ", "no ", "em ")
 
@@ -354,8 +394,11 @@ _TROCO = re.compile(r"troco\s*(?:para|pra|de|p/)?\s*(?:r\$)?\s*([\d.,]+)")
 
 def forma_de_pagamento(texto: str) -> str | None:
     """"pix" → PIX; "crédito" → CARTAO_DE_CREDITO; "débito" → CARTAO_DE_DEBITO;
-    "dinheiro" → MONEY; "cartão" sem dizer qual → "CARTAO"; outro → None."""
+    "dinheiro" → MONEY; "vale-gás" → VALEGAS; "cartão" sem dizer qual → "CARTAO";
+    "outra forma" → "OUTRA"; outro → None."""
     mensagem = normalizar(texto)
+    if _contem(mensagem, ("vale gas", "valegas", "vale-gas", "vale", "cupom")):
+        return "VALEGAS"
     if _contem(mensagem, ("pix",)):
         return "PIX"
     if _contem(mensagem, ("credito",)):
@@ -366,7 +409,22 @@ def forma_de_pagamento(texto: str) -> str | None:
         return "MONEY"
     if _contem(mensagem, ("cartao",)):
         return "CARTAO"
+    if _contem(mensagem, ("outra forma", "outra", "boleto", "cheque", "transferencia", "carteira")):
+        return "OUTRA"
     return None
+
+
+def extrair_pedido_livre(texto: str) -> Modelo | None:
+    """Extrai quantidade, pagamento e troco de frases livres sem vírgula (ex.: 'quero 2 botijões no pix')."""
+    if _tem_digito_nao_ascii(texto):
+        return None
+    quantidade = quantidade_do_texto(texto)
+    pagamento = forma_de_pagamento(texto)
+    troco_match = _TROCO.search(normalizar(texto))
+    troco = valor_em_reais(troco_match.group(1)) if troco_match else None
+    if quantidade is None and pagamento is None and troco is None:
+        return None
+    return Modelo(quantidade=quantidade, pagamento=pagamento, troco=troco)
 
 
 def _rua_e_numero(parte: str) -> tuple[str | None, str | None, str | None]:

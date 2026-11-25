@@ -19,12 +19,14 @@ Decisões (ver `docs/revgas-api-vendas.md`):
 
 from __future__ import annotations
 
+import hashlib
 import json
 from decimal import Decimal
 from typing import Any
 
+from revgas_chatbot.conversa.entrada import com_nono_digito
 from revgas_chatbot.conversa.estados import nome_do_estado
-from revgas_chatbot.vendas.pedido import DINHEIRO, Pedido, ProdutoCatalogo
+from revgas_chatbot.vendas.pedido import DINHEIRO, Endereco, Pedido, ProdutoCatalogo
 
 CANAL = "WHATSAPP"
 ORIGEM = "INTEGRATION"  # venda criada por integração (central de pedidos)
@@ -34,6 +36,12 @@ CENTAVOS = Decimal("0.01")
 
 def marca(pedido_id: str) -> str:
     return f"[chatbot:{pedido_id}]"
+
+
+def marca_telefone(telefone: str) -> str:
+    """Identificador anônimo (hash curto) do telefone para separar histórico no modo cliente fixo."""
+    normalizado = com_nono_digito(telefone.strip())
+    return f"[tel:{hashlib.sha256(normalizado.encode()).hexdigest()[:8]}]"
 
 
 def reais(valor: Decimal) -> str:
@@ -50,8 +58,25 @@ def _observation(pedido: Pedido) -> str:
     # Troco "para" exatamente o valor em dinheiro = não precisa de troco.
     if em_dinheiro > 0 and pedido.troco_para is not None and pedido.troco_para > em_dinheiro:
         partes.append(f"Troco para {reais(pedido.troco_para)}.")
+    if pedido.pagamento_pix == "AGORA":
+        partes.append("PIX: pagar agora.")
+    elif pedido.pagamento_pix == "ENTREGA":
+        partes.append("PIX: pagar na entrega.")
     partes.append(marca(pedido.pedido_id))
     return " ".join(partes)
+
+
+def complemento_com_quadra(endereco: Endereco) -> str | None:
+    """Combina quadra (se houver) e complemento no campo `complement` da API RevGás."""
+    partes: list[str] = []
+    if endereco.quadra and endereco.quadra.strip():
+        quadra = endereco.quadra.strip()
+        if not quadra.lower().startswith(("quadra", "qd")):
+            quadra = f"Quadra {quadra}"
+        partes.append(quadra)
+    if endereco.complemento and endereco.complemento.strip():
+        partes.append(endereco.complemento.strip())
+    return ", ".join(partes) if partes else None
 
 
 def montar_corpo_venda(
@@ -76,6 +101,13 @@ def montar_corpo_venda(
     if endereco is None:
         raise ValueError("pedido sem endereço: valide antes de montar a venda")
 
+    pagamentos = []
+    for p in pedido.pagamentos:
+        item_pag: dict[str, Any] = {"payment_type": p.tipo, "value": p.valor.quantize(CENTAVOS)}
+        if p.serial and p.serial.strip():
+            item_pag["serial"] = p.serial.strip()
+        pagamentos.append(item_pag)
+
     corpo: dict[str, Any] = {
         "establishment_id": establishment_id,
         "customer_id": customer_id,
@@ -83,9 +115,7 @@ def montar_corpo_venda(
         "origin": ORIGEM,
         "option": OPCAO,
         "products": linhas,
-        "payments": [
-            {"payment_type": p.tipo, "value": p.valor.quantize(CENTAVOS)} for p in pedido.pagamentos
-        ],
+        "payments": pagamentos,
         "location": endereco.logradouro.strip(),
         "number": endereco.numero.strip(),
         "neighborhood": endereco.bairro.strip(),
@@ -94,8 +124,9 @@ def montar_corpo_venda(
         "state_federation": nome_do_estado(endereco.estado) or endereco.estado.strip(),
         "observation": _observation(pedido),
     }
-    if endereco.complemento and endereco.complemento.strip():
-        corpo["complement"] = endereco.complemento.strip()
+    complemento = complemento_com_quadra(endereco)
+    if complemento:
+        corpo["complement"] = complemento
     if endereco.referencia and endereco.referencia.strip():
         corpo["landmark"] = endereco.referencia.strip()
     return corpo

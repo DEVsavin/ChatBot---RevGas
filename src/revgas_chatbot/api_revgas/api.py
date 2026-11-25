@@ -40,7 +40,7 @@ class ApiRevGas(Protocol):
     def criar_venda(self, corpo: dict[str, Any]) -> Resposta: ...
 
     def buscar_vendas(
-        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int
+        self, *, customer_id: int, channel: str | None, de: date, ate: date, pagina: int, page_size: int = 100
     ) -> Resposta:
         """Vendas do cliente entre `de` e `ate` (datas).
 
@@ -49,6 +49,26 @@ class ApiRevGas(Protocol):
         mas isso não foi confirmado na prática: quem chama não deve confiar
         nem na ordem nem nos filtros.
         """
+        ...
+
+    def buscar_venda(self, venda_id: int) -> Resposta:
+        """Detalha uma venda específica (`GET /sales/{id}`), incluindo status e logs."""
+        ...
+
+    def atualizar_venda(self, venda_id: int, corpo: dict[str, Any]) -> Resposta:
+        """Atualiza uma venda existente (`PUT /sales/{id}`), ex.: anotar `observation`."""
+        ...
+
+    def buscar_produtos(
+        self, *, establishment_id: int, pagina: int = 1, page_size: int = 100
+    ) -> Resposta:
+        """Lista produtos ativos do estabelecimento (`GET /products`)."""
+        ...
+
+    def buscar_acordos(
+        self, *, establishment_id: int, pagina: int = 1, page_size: int = 100
+    ) -> Resposta:
+        """Lista acordos de preço do estabelecimento (`GET /deals`)."""
         ...
 
 

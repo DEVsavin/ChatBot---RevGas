@@ -13,28 +13,15 @@ import pytest
 
 from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.api_revgas.api_falsa import ApiRevGasFalsa, RelogioFalso
-from revgas_chatbot.atendimento.fila import FilaDeAtendimento
-from revgas_chatbot.conversa.conversa import MODELO_DE_MENSAGEM, Conversa, Dependencias
+from revgas_chatbot.conversa.conversa import Conversa, Dependencias
 from revgas_chatbot.fuso import FUSO_TERESINA
-from revgas_chatbot.ia.interpretacao import Interpretacao, InterpretadorFalso
 from revgas_chatbot.vendas.pedido import ProdutoCatalogo
 from revgas_chatbot.vendas.registro import RegistradorDeVendas
 
 MARIA = "5500900000001"
 NOVO = "5500900000002"
 CATALOGO = {26717: ProdutoCatalogo(nome="botijão de gás", preco=Decimal("110.00"))}
-PAGAMENTOS = {"PIX", "MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO"}
-TEXTO_DO_USUARIO = """Para agilizar, você pode enviar todas as informações em uma única mensagem, separadas por vírgulas, nesta ordem:
-
-Quantidade, endereço, bairro, cidade e forma de pagamento.
-
-Exemplo:
-2, Rua das Flores 123, Centro, Teresina, Pix
-
-💵 Se o pagamento for em dinheiro e precisar de troco, informe o valor:
-Dinheiro, troco para R$ 200,00
-
-Prefere ir com calma? Sem problemas! 😊 Você também pode responder às perguntas uma de cada vez."""
+PAGAMENTOS = {"PIX", "MONEY", "CARTAO_DE_DEBITO", "CARTAO_DE_CREDITO", "VALEGAS"}
 
 
 @pytest.fixture
@@ -47,19 +34,14 @@ def api():
 
 
 @pytest.fixture
-def ia():
-    return InterpretadorFalso()
-
-
-@pytest.fixture
-def dependencias(api, tmp_path, ia):
+def dependencias(api):
     cadenciada = ApiCadenciada(api, api.relogio)
     return Dependencias(
         api=cadenciada,
         registrador=RegistradorDeVendas(api=cadenciada, relogio=api.relogio, catalogo=CATALOGO,
                                         pagamentos_permitidos=PAGAMENTOS, establishment_id=2580),
-        fila=FilaDeAtendimento(tmp_path, api.relogio), catalogo=CATALOGO, pagamentos=PAGAMENTOS,
-        seguranca="ORIENTAÇÕES", interpretador=None,
+        catalogo=CATALOGO, pagamentos=PAGAMENTOS,
+        seguranca="ORIENTAÇÕES",
     )
 
 
@@ -72,31 +54,17 @@ def texto(resposta):
     return "\n".join(resposta)
 
 
-# --- A2: o modelo de mensagem ----------------------------------------------------------------
-
-
-def test_modelo_e_exatamente_o_texto_do_usuario():
-    assert MODELO_DE_MENSAGEM == TEXTO_DO_USUARIO
-
-
-def test_modelo_aparece_antes_da_quantidade_para_quem_tem_cadastro(dependencias):
+def test_perguntas_individuais_para_quem_tem_cadastro(dependencias):
     *_, resposta = falar(Conversa(MARIA, dependencias), "sim")
 
-    assert resposta == ["Olá, Maria!", TEXTO_DO_USUARIO, "Botijão de gás (R$ 110,00). Quantos?"]
+    assert resposta == ["Olá, Maria!", "Botijão de gás (R$ 110,00). Quantos?"]
 
 
-def test_modelo_aparece_antes_da_quantidade_para_cliente_novo_e_com_ia(dependencias, ia):
-    conversa = Conversa(NOVO, replace(dependencias, interpretador=ia))
+def test_perguntas_individuais_para_cliente_novo(dependencias):
+    conversa = Conversa(NOVO, dependencias)
     *_, resposta = falar(conversa, "sim", "Fulano")
 
-    assert resposta == ["Olá, Fulano!", TEXTO_DO_USUARIO, "Botijão de gás (R$ 110,00). Quantos?"]
-
-
-def test_corrigir_produto_nao_repete_o_modelo(dependencias):
-    conversa = Conversa(MARIA, dependencias)
-    falar(conversa, "sim", "2", "sim", "1", "2")
-
-    assert TEXTO_DO_USUARIO not in texto(conversa.responder("1"))
+    assert resposta == ["Olá, Fulano!", "Botijão de gás (R$ 110,00). Quantos?"]
 
 
 # --- A1: estado automático -------------------------------------------------------------------
@@ -106,23 +74,12 @@ def test_corrigir_produto_nao_repete_o_modelo(dependencias):
                                                 ("timon", "timon, Maranhão")])
 def test_estado_nunca_e_perguntado(dependencias, cidade, no_resumo):
     conversa = Conversa(NOVO, dependencias)
-    respostas = falar(conversa, "sim", "Fulano", "1", "Rua Nova", "10", "Centro", cidade)
+    respostas = falar(conversa, "sim", "Fulano", "1", "Rua Nova", "10", "pular", "Centro", cidade)
 
-    assert respostas[-1] == ["Complemento? (ou 'pular')"]
+    assert respostas[-1] == ["Complemento?\n0) Não tem / Pular etapa"]
     assert not any("estado" in m.lower() for r in respostas for m in r)
-    *_, resumo = [conversa.responder(m) for m in ("pular", "pular", "1")]
+    *_, resumo = [conversa.responder(m) for m in ("pular", "pular", "1", "2")]
     assert no_resumo in texto(resumo)
-
-
-def test_estado_dito_pela_ia_vence(dependencias, ia):
-    frase = "quero 1 botijão pra Rua Nova 10, Centro, Caxias, MA, no pix"
-    ia.respostas[frase] = Interpretacao(intencao="PEDIR", produto="botijão de gás", quantidade=1, pagamento="PIX",
-                                        endereco={"rua": "Rua Nova", "numero": "10", "bairro": "Centro",
-                                                  "cidade": "Caxias", "estado": "MA"})
-    conversa = Conversa(NOVO, replace(dependencias, interpretador=ia))
-    *_, resumo = falar(conversa, "sim", "Fulano", frase)
-
-    assert "Caxias, Maranhão" in texto(resumo)
 
 
 # --- A3: leitura do modelo por vírgulas, sem IA --------------------------------------------
@@ -130,12 +87,14 @@ def test_estado_dito_pela_ia_vence(dependencias, ia):
 
 def test_modelo_completo_vai_direto_ao_resumo(dependencias, api):
     conversa = Conversa(NOVO, dependencias)
-    *_, resumo = falar(conversa, "sim", "Fulano", "2, Rua das Flores 123, Centro, Teresina, Pix")
+    *_, pix = falar(conversa, "sim", "Fulano", "2, Rua das Flores 123, Centro, Teresina, Pix")
+    assert "O pagamento no PIX será:" in texto(pix)
+    resumo = conversa.responder("2")
 
     assert "Confira seu pedido:" in texto(resumo)
     assert "2x botijão de gás" in texto(resumo)
     assert "Rua das Flores, 123 — Centro, Teresina, Piauí" in texto(resumo)
-    assert "Pagamento: PIX" in texto(resumo)
+    assert "Pagamento: PIX (pagar na entrega)" in texto(resumo)
     conversa.responder("1")
     assert api.vendas_criadas()[0]["products"][0]["quantity"] == 2
 
@@ -160,17 +119,19 @@ def test_modelo_incompleto_pergunta_so_o_que_falta(dependencias):
     conversa = Conversa(NOVO, dependencias)
     *_, resposta = falar(conversa, "sim", "Fulano", "3, Rua Sete, Centro")
 
-    assert resposta[-1] == "Qual é o número? (ou S/N)"  # sem número na rua
+    assert resposta[-1] == "Qual é o número?\n0) Não tem / Pular etapa"  # sem número na rua
     assert conversa.responder("10") == ["Qual é a cidade?"]
     resposta = conversa.responder("Teresina")
     assert resposta[-1].startswith("Complemento?") is False and "Como vai pagar?" in texto(resposta)
-    resumo = conversa.responder("1")
+    conversa.responder("1")
+    resumo = conversa.responder("2")
     assert "3x botijão de gás" in texto(resumo) and "Rua Sete, 10 — Centro, Teresina, Piauí" in texto(resumo)
 
 
 def test_modelo_com_s_n(dependencias):
     conversa = Conversa(NOVO, dependencias)
-    *_, resumo = falar(conversa, "sim", "Fulano", "1, Rua Nova S/N, Centro, Teresina, Pix")
+    falar(conversa, "sim", "Fulano", "1, Rua Nova S/N, Centro, Teresina, Pix")
+    resumo = conversa.responder("2")
 
     assert "Rua Nova, S/N — Centro, Teresina, Piauí" in texto(resumo)
 
@@ -191,6 +152,8 @@ def test_formas_de_pagamento_do_modelo(dependencias, forma, rotulo):
 
     if forma == "dinheiro":
         assert "Vai precisar de troco?" in texto(resposta)
+    elif forma == "PIX":
+        assert "O pagamento no PIX será:" in texto(resposta)
     else:
         assert f"Pagamento: {rotulo}" in texto(resposta)
 
@@ -204,7 +167,8 @@ def test_cadastro_com_modelo_sem_endereco_pergunta_o_do_cadastro(dependencias):
 
 def test_cadastro_com_modelo_com_endereco_vale_o_dito(dependencias):
     conversa = Conversa(MARIA, dependencias)
-    *_, resumo = falar(conversa, "sim", "2, Rua das Flores 123, Centro, Teresina, Pix")
+    falar(conversa, "sim", "2, Rua das Flores 123, Centro, Teresina, Pix")
+    resumo = conversa.responder("2")
 
     assert "Rua das Flores, 123 — Centro, Teresina, Piauí" in texto(resumo)
 
@@ -221,20 +185,9 @@ def test_quantidade_invalida_no_modelo_e_perguntada(dependencias):
     *_, resposta = falar(conversa, "sim", "Fulano", "50, Rua Nova 45, Centro, Teresina, Pix")
 
     assert resposta[-1] == "Quantos?"
+    conversa.responder("2")
     resumo = conversa.responder("2")
     assert "Rua Nova, 45" in texto(resumo) and "2x botijão de gás" in texto(resumo)
-
-
-def test_com_ia_o_modelo_vai_para_a_ia(dependencias, ia):
-    frase = "2, Rua das Flores 123, Centro, Teresina, Pix"
-    ia.respostas[frase] = Interpretacao(intencao="PEDIR", produto="botijão de gás", quantidade=2, pagamento="PIX",
-                                        endereco={"rua": "Rua das Flores", "numero": "123", "bairro": "Centro",
-                                                  "cidade": "Teresina"})
-    conversa = Conversa(NOVO, replace(dependencias, interpretador=ia))
-    *_, resumo = falar(conversa, "sim", "Fulano", frase)
-
-    assert frase in [t for t, _ in ia.recebidos]
-    assert "Rua das Flores, 123 — Centro, Teresina, Piauí" in texto(resumo)
 
 
 # --- Revisão do "agilizar": I1 (frase comum com vírgula) e I2 (número do apartamento) -------
@@ -250,7 +203,8 @@ def test_i1_frase_comum_com_virgula_usa_so_a_quantidade(dependencias, frase):
 
 def test_i1_exemplo_do_modelo_continua_indo_direto_ao_resumo(dependencias):
     conversa = Conversa(NOVO, dependencias)
-    *_, resumo = falar(conversa, "sim", "Fulano", "2, Rua das Flores 123, Centro, Teresina, Pix")
+    falar(conversa, "sim", "Fulano", "2, Rua das Flores 123, Centro, Teresina, Pix")
+    resumo = conversa.responder("2")
 
     assert "Confira seu pedido:" in texto(resumo)
 
@@ -274,4 +228,4 @@ def test_i2_numero_que_faz_parte_do_nome_nao_e_confundido(dependencias, rua, no_
     *_, resposta = falar(conversa, "sim", "Fulano", f"1, {rua}, Centro, Teresina, Pix")
 
     if no_resumo:
-        assert no_resumo in texto(resposta)
+        assert no_resumo in texto(conversa.responder("2"))

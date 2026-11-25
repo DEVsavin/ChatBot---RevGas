@@ -129,11 +129,20 @@ class AtendimentoWhatsApp:
         conversa = self._conversas.get(m.telefone)
         if conversa is None or conversa.encerrada:
             conversa = self._criar_conversa(m.telefone)
-            respostas = conversa.iniciar()
             self._conversas[m.telefone] = conversa
-            # I1: vazamento, atendente ou devolução logo na primeira mensagem → atende já.
-            if comando(m.texto, livre=False) in ("VAZAMENTO", "ATENDENTE") or pedido_de_devolucao(m.texto):
+            cmd = comando(m.texto, livre=False)
+            # I1: vazamento, atendente, devolução ou consulta direta logo na 1ª mensagem → atende já.
+            if cmd in (
+                "VAZAMENTO",
+                "ATENDENTE",
+                "MEUS_PEDIDOS",
+                "ACOMPANHAR_PEDIDO",
+                "CONSULTAR_PRECO",
+                "REPETIR_PEDIDO",
+            ) or pedido_de_devolucao(m.texto):
                 respostas = conversa.responder(m.texto)
+            else:
+                respostas = conversa.iniciar()
         else:
             respostas = conversa.responder(m.texto)
         self._enviar(m.telefone, respostas)
