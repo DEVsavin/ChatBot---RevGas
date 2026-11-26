@@ -135,8 +135,16 @@ class ApiRevGasHttp:
     def buscar_clientes(self, telefone: str) -> Resposta:
         return self._enviar("GET", "/customers", params={"phone": telefone})
 
+    def buscar_cliente(self, cliente_id: int) -> Resposta:
+        resposta = self._enviar("GET", f"/customers/{int(cliente_id)}")
+        return self._sem_envelope(resposta) if resposta.status == 200 else resposta
+
     def cadastrar_cliente(self, dados: dict[str, Any]) -> Resposta:
         return self._criacao(self._enviar("POST", "/customers", json=dados))
+
+    def atualizar_cliente(self, cliente_id: int, dados: dict[str, Any]) -> Resposta:
+        resposta = self._enviar("PUT", f"/customers/{int(cliente_id)}", json=dados)
+        return self._sem_envelope(resposta) if resposta.status == 200 else resposta
 
     def criar_venda(self, corpo: dict[str, Any]) -> Resposta:
         return self._criacao(self._enviar("POST", "/sales", json=corpo))
@@ -222,6 +230,14 @@ class ApiRevGasHttp:
             dados = resposta.json()
         except ValueError:
             dados = None
+        if (
+            resposta.status_code == 200
+            and isinstance(dados, dict)
+            and "data" not in dados
+            and isinstance(dados.get("pagination"), dict)
+            and dados["pagination"].get("count") == 0
+        ):
+            dados = {**dados, "data": []}
         if self._monitor is not None:
             self._monitor.registrar(
                 metodo=metodo,

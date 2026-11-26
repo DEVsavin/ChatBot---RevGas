@@ -23,7 +23,14 @@ import logging
 from revgas_chatbot.atendimento.atendimento import TransferirAtendente, mascarar
 from revgas_chatbot.conversa.estados import nome_do_estado
 from revgas_chatbot.vendas.pedido import ForaDoCatalogo, Invalido, Pedido, Problema, ProdutoCatalogo, validar
-from revgas_chatbot.vendas.venda import CANAL, complemento_com_quadra, marca, marca_telefone, montar_corpo_venda
+from revgas_chatbot.vendas.venda import (
+    CANAL,
+    complemento_com_quadra,
+    marca,
+    marca_telefone,
+    montar_corpo_venda,
+    variantes_telefone,
+)
 
 
 @dataclass(frozen=True)
@@ -54,15 +61,14 @@ _log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class VendaReal:
-    """Opções do modo real (M5, D16) enquanto `/customers` der 403.
+    """Opções do modo real (`--venda-real`).
 
-    Toda venda usa o cliente de demonstração fixo (sem buscar nem cadastrar
-    cliente), não avisa entregadores, leva o ponto genérico do centro de
-    Teresina (como a venda 30811219) e uma observação mínima, sem nome nem
-    telefone de quem conversa (a venda é legível para a turma no 2580).
+    Quando `cliente_fixo` é `None` (padrão com `/v1/customers` liberado), o
+    registrador busca o cliente real pelo telefone, cadastra se for novo
+    (`POST /v1/customers`) e atualiza o endereço se mudou (`PUT /v1/customers/{id}`).
     """
 
-    cliente_fixo: int
+    cliente_fixo: int | None = None
     broadcast: str = "NONE"
     coordenadas: tuple[float, float] = (-5.0892, -42.8016)
     aviso: str = "DEMONSTRAÇÃO DO CHATBOT - NÃO ENTREGAR."
@@ -150,6 +156,41 @@ def dados_do_cliente(pedido: Pedido) -> dict[str, Any]:
     return dados
 
 
+def _coordenadas_do_cliente(cliente: dict[str, Any]) -> tuple[float, float] | None:
+    """Extrai (latitude, longitude) válidas do cadastro do cliente, se houver."""
+    lat = cliente.get("latitude_as_number") if cliente.get("latitude_as_number") is not None else cliente.get("latitude")
+    lon = cliente.get("longitude_as_number") if cliente.get("longitude_as_number") is not None else cliente.get("longitude")
+    if lat is None or lon is None:
+        return None
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+    if lat_f == 0.0 and lon_f == 0.0:
+        return None
+    return (lat_f, lon_f)
+
+
+def _cadastro_mudou(cliente: dict[str, Any], pedido: Pedido) -> bool:
+    """True se o pedido trouxe nome ou endereço diferente do que está salvo no ERP."""
+    endereco = pedido.endereco
+    if endereco is None:
+        return False
+    esperado = {
+        "name": pedido.nome.strip(),
+        "location": endereco.logradouro.strip(),
+        "number": endereco.numero.strip(),
+        "neighborhood": endereco.bairro.strip(),
+        "city": endereco.cidade.strip(),
+        "state_federation": nome_do_estado(endereco.estado) or endereco.estado.strip(),
+    }
+    for campo, novo in esperado.items():
+        atual = (cliente.get(campo) or "").strip() if isinstance(cliente.get(campo), str) else ""
+        if novo and atual.casefold() != novo.casefold():
+            return True
+    return False
+
+
 class RegistradorDeVendas:
     def __init__(
         self,
@@ -209,19 +250,23 @@ class RegistradorDeVendas:
             return TransferirAtendente("produto fora do catálogo", pedido.pedido_id)
 
         try:
-            customer_id = self._garantir_cliente(pedido)
+            customer_id, coords_cliente = self._garantir_cliente(pedido)
             real = self._venda_real
+            if real is None:
+                pedido_envio = pedido
+            elif real.cliente_fixo is not None:
+                pedido_envio = replace(pedido, observacao=f"{real.aviso} {marca_telefone(pedido.telefone)}")
+            else:
+                pedido_envio = replace(pedido, observacao=real.aviso)
             corpo = montar_corpo_venda(
-                # Modo real: a observação leva o aviso + hash anônimo do telefone (+ troco/PIX + marca).
-                pedido
-                if real is None
-                else replace(pedido, observacao=f"{real.aviso} {marca_telefone(pedido.telefone)}"),
+                pedido_envio,
                 customer_id=customer_id,
                 catalogo=self._catalogo,
                 establishment_id=self._establishment_id,
             )
             if real is not None:
-                corpo.update(broadcast=real.broadcast, lat=real.coordenadas[0], lon=real.coordenadas[1])
+                lat, lon = coords_cliente or real.coordenadas
+                corpo.update(broadcast=real.broadcast, lat=lat, lon=lon)
             enviado_em = self._relogio.agora()
             self._venda_enviada.add(pedido.pedido_id)
             try:
@@ -278,34 +323,63 @@ class RegistradorDeVendas:
                 return None
             pagina += 1
 
-    def _garantir_cliente(self, pedido: Pedido) -> int:
-        if self._venda_real is not None:
-            return self._venda_real.cliente_fixo  # D16: /customers dá 403 para a nossa chave
+    def _garantir_cliente(self, pedido: Pedido) -> tuple[int, tuple[float, float] | None]:
+        if self._venda_real is not None and self._venda_real.cliente_fixo is not None:
+            return self._venda_real.cliente_fixo, None
         clientes = self._buscar_clientes(pedido)
         if len(clientes) > 1:
             raise _Parar(TransferirAtendente("mais de um cliente com o mesmo telefone", pedido.pedido_id))
         if clientes:
-            return clientes[0]["id"]
+            cliente = clientes[0]
+            self._sincronizar_cliente_se_mudou(cliente, pedido)
+            return cliente["id"], _coordenadas_do_cliente(cliente)
         try:
             resposta = self._api.cadastrar_cliente(dados_do_cliente(pedido))
         except TempoEsgotado:
             # O cadastro pode ter sido feito: buscar de novo em vez de recadastrar.
             clientes = self._buscar_clientes(pedido)
             if len(clientes) == 1:
-                return clientes[0]["id"]
+                return clientes[0]["id"], _coordenadas_do_cliente(clientes[0])
             raise _Parar(
                 TransferirAtendente("resultado incerto ao cadastrar o cliente", pedido.pedido_id)
             ) from None
-        return self._exigir_status(resposta, 201, pedido, "cadastrar o cliente")["id"]
+        criado = self._exigir_status(resposta, 201, pedido, "cadastrar o cliente")
+        return criado["id"], _coordenadas_do_cliente(criado)
+
+    def _sincronizar_cliente_se_mudou(self, cliente: dict[str, Any], pedido: Pedido) -> None:
+        """Atualiza endereço/nome no ERP via PUT /v1/customers/{id} se o cliente alterou."""
+        if not _cadastro_mudou(cliente, pedido):
+            return
+        corpo = dados_do_cliente(pedido)
+        telefones_atuais = cliente.get("phones")
+        if isinstance(telefones_atuais, list) and telefones_atuais:
+            corpo["phones"] = telefones_atuais
+        try:
+            resposta = self._api.atualizar_cliente(cliente["id"], corpo)
+            if resposta.status != 200:
+                _log.warning(
+                    "PUT /customers/%s retornou HTTP %s; seguindo com a venda",
+                    cliente["id"],
+                    resposta.status,
+                )
+        except TempoEsgotado:
+            _log.warning("Timeout em PUT /customers/%s; seguindo com a venda", cliente["id"])
 
     def _buscar_clientes(self, pedido: Pedido) -> list[dict]:
-        try:
-            resposta = self._api.buscar_clientes(pedido.telefone)
-        except TempoEsgotado:
-            raise _Parar(
-                TransferirAtendente("sem resposta da API ao buscar o cliente", pedido.pedido_id)
-            ) from None
-        return self._exigir_status(resposta, 200, pedido, "buscar o cliente")["data"]
+        for numero in variantes_telefone(pedido.telefone):
+            try:
+                resposta = self._api.buscar_clientes(numero)
+            except TempoEsgotado:
+                raise _Parar(
+                    TransferirAtendente("sem resposta da API ao buscar o cliente", pedido.pedido_id)
+                ) from None
+            corpo = self._exigir_status(resposta, 200, pedido, "buscar o cliente")
+            dados = corpo.get("data") if isinstance(corpo, dict) else None
+            if dados is None:
+                dados = []
+            if dados:
+                return dados
+        return []
 
     def _exigir_status(self, resposta: Resposta, status: int, pedido: Pedido, etapa: str) -> Any:
         """Devolve os dados se o status for o exigido; senão, para com o resultado certo."""

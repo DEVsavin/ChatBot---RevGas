@@ -55,8 +55,14 @@ class ApiCadenciada:
     def buscar_clientes(self, telefone: str) -> Resposta:
         return self._chamar(lambda: self._api.buscar_clientes(telefone))
 
+    def buscar_cliente(self, cliente_id: int) -> Resposta:
+        return self._chamar(lambda: self._api.buscar_cliente(cliente_id))
+
     def cadastrar_cliente(self, dados: dict[str, Any]) -> Resposta:
         return self._chamar(lambda: self._api.cadastrar_cliente(dados))
+
+    def atualizar_cliente(self, cliente_id: int, dados: dict[str, Any]) -> Resposta:
+        return self._chamar(lambda: self._api.atualizar_cliente(cliente_id, dados))
 
     def criar_venda(self, corpo: dict[str, Any]) -> Resposta:
         return self._chamar(lambda: self._api.criar_venda(corpo))

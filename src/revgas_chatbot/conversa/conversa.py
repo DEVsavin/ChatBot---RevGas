@@ -66,7 +66,7 @@ from revgas_chatbot.vendas.pedido import (
     ProdutoCatalogo,
 )
 from revgas_chatbot.vendas.registro import EmAndamento, PedidoInvalido, RegistradorDeVendas, VendaCriada
-from revgas_chatbot.vendas.venda import marca, reais
+from revgas_chatbot.vendas.venda import marca, reais, variantes_telefone
 
 MAX_QUANTIDADE = 10
 
@@ -92,6 +92,7 @@ PASSOS_DO_RASCUNHO = frozenset(
     {
         "PRODUTO",
         "QUANTIDADE",
+        "MAIS_ITENS",
         "ENDERECO_DO_CADASTRO",
         "CAMPO_DO_ENDERECO",
         "PAGAMENTO",
@@ -141,6 +142,7 @@ PERGUNTA_DO_QUE_CORRIGIR = "O que quer corrigir?\n" + "\n".join(
 )
 OPCOES_MOMENTO_PIX = ["Pagar agora", "Pagar na entrega"]
 PERGUNTA_MOMENTO_PIX = "O pagamento no PIX será:\n1) Pagar agora\n2) Pagar na entrega"
+PERGUNTA_MAIS_ITENS = "Você deseja pedir outro item?\n1) Sim\n2) Não"
 PERGUNTA_DO_TROCO = "Vai precisar de troco? Responda o valor (ex.: 200) ou 'não'."
 PERGUNTA_DO_SERIAL_VALEGAS = "Qual é o código do vale-gás? (7 caracteres, ex.: 1234567)"
 NAO_REFACA_O_PEDIDO = "Não faça um novo pedido: nossa equipe vai verificar se ele foi registrado."
@@ -179,6 +181,7 @@ EXEMPLOS_DAS_PERGUNTAS = {
     "REPETIR_ULTIMO": "1 para sim ou 2 para fazer outro pedido",
     "PRODUTO": _OPCAO,
     "QUANTIDADE": "2",
+    "MAIS_ITENS": "1 para sim ou 2 para não",
     "ENDERECO_DO_CADASTRO": "responda sim ou não",
     "PAGAMENTO": _OPCAO,
     "MOMENTO_PIX": _OPCAO,
@@ -267,6 +270,7 @@ class Conversa:
         self._endereco_do_cadastro: Endereco | None = None
         self._produto_id: int | None = None
         self._quantidade = 0
+        self._itens: list[Item] = []
         self._pagamento = ""
         self._pagamento_pix: str | None = None
         self._troco: Decimal | None = None
@@ -317,18 +321,24 @@ class Conversa:
             self._passo = "NOME"
             return [saudacao, "Qual é o seu nome?"]
         [cliente] = clientes
-        self._nome = cliente["name"]
+        self._nome = (cliente.get("name") or "").strip()
         self._nome_lembrado = self._nome
         self._endereco_do_cadastro = _endereco_do_cadastro(cliente)
+        saudacao_cliente = f"Olá, {self._nome.split()[0]}!" if self._nome else saudacao
         if self._d.historico is not None:
             ultima = self._d.historico.ultima_venda_repetivel(
                 self._telefone, pagamentos_permitidos=self._d.pagamentos
             )
             if ultima is not None:
                 self._ultima_repetivel = ultima
+                if ultima.endereco is not None:
+                    self._endereco_lembrado = ultima.endereco
                 self._passo = "REPETIR_ULTIMO"
-                return [f"Olá, {self._nome.split()[0]}!", self._pergunta_repetir(ultima)]
-        return [f"Olá, {self._nome.split()[0]}!", *self._perguntar_produto()]
+                return [saudacao_cliente, self._pergunta_repetir(ultima)]
+        if not self._nome:
+            self._passo = "NOME"
+            return [saudacao, "Qual é o seu nome?"]
+        return [saudacao_cliente, *self._perguntar_produto()]
 
     def responder(self, texto: str) -> list[str]:
         antes = self._chave_da_pergunta()
@@ -546,6 +556,7 @@ class Conversa:
         pid, qtd = pedido.itens_ids[0]
         self._produto_id = pid
         self._quantidade = qtd
+        self._itens = [Item(product_id=p_id, quantidade=q) for p_id, q in pedido.itens_ids if p_id in self._d.catalogo]
         self._endereco = pedido.endereco
         self._pagamento = pedido.pagamentos[0] if pedido.pagamentos else ""
         self._pagamento_pix = None
@@ -639,7 +650,7 @@ class Conversa:
         self._nome_lembrado = nome
         if self._corrigindo:
             return self._voltar_ao_resumo()
-        if self._produto_id is not None and self._quantidade > 0:
+        if self._itens_do_pedido():
             return [f"Olá, {nome.split()[0]}!", *self._seguir()]
         return [f"Olá, {nome.split()[0]}!", *self._perguntar_produto()]
 
@@ -670,11 +681,37 @@ class Conversa:
             if livre.pagamento is not None or livre.troco is not None:
                 return self._ler_modelo(livre)
             self._quantidade = livre.quantidade
-            return self._seguir()
+            return self._confirmar_item_e_perguntar_mais(livre.quantidade)
         quantidade = quantidade_do_texto(texto)
         if quantidade is None or not 1 <= quantidade <= MAX_QUANTIDADE:
             return recusa
         self._quantidade = quantidade
+        return self._confirmar_item_e_perguntar_mais(quantidade)
+
+    def _adicionar_item(self, product_id: int, quantidade: int) -> None:
+        for idx, item in enumerate(self._itens):
+            if item.product_id == product_id:
+                nova_qtd = min(item.quantidade + quantidade, MAX_QUANTIDADE)
+                self._itens[idx] = Item(product_id=product_id, quantidade=nova_qtd)
+                return
+        self._itens.append(Item(product_id=product_id, quantidade=quantidade))
+
+    def _confirmar_item_e_perguntar_mais(self, quantidade: int) -> list[str]:
+        assert self._produto_id is not None
+        self._adicionar_item(self._produto_id, quantidade)
+        if len(self._produtos) > 1:
+            self._passo = "MAIS_ITENS"
+            return [PERGUNTA_MAIS_ITENS]
+        return self._seguir()
+
+    def _passo_mais_itens(self, texto: str) -> list[str]:
+        escolha = opcao(texto, ["Sim", "Não"])
+        if escolha is None and sim_ou_nao(texto) is not None:
+            escolha = 0 if sim_ou_nao(texto) else 1
+        if escolha is None:
+            return [SIM_OU_NAO, PERGUNTA_MAIS_ITENS]
+        if escolha == 0:
+            return self._perguntar_produto()
         return self._seguir()
 
     def _passo_endereco_do_cadastro(self, texto: str) -> list[str]:
@@ -933,8 +970,14 @@ class Conversa:
             self._passo = "DIGITAR_NUMERO"
             return [aviso, PERGUNTA_DO_NUMERO]
         if campo == "serial":
-            self._passo = "SERIAL_VALEGAS"
-            return [aviso, PERGUNTA_DO_SERIAL_VALEGAS]
+            self._pagamento = ""
+            self._serial_valegas = None
+            self._passo = "PAGAMENTO"
+            return [
+                "O código do vale-gás não é válido ou já foi utilizado. "
+                "Escolha outra forma de pagamento (ou selecione Vale-gás novamente para informar outro código):",
+                self._pergunta_pagamento(),
+            ]
         self._corrigindo = False
         return self._transferir(
             "Não consegui concluir seu pedido agora.",
@@ -964,6 +1007,9 @@ class Conversa:
             return [DA_LISTA, PERGUNTA_DO_QUE_CORRIGIR]
         self._corrigindo = True
         if escolha == 0:
+            self._itens = []
+            self._produto_id = None
+            self._quantidade = 0
             return self._perguntar_produto()
         if escolha == 1:
             return self._comecar_endereco()
@@ -1351,7 +1397,7 @@ class Conversa:
 
     def _seguir(self) -> list[str]:
         """Vai para o primeiro item do pedido que ainda falta (ou para o resumo)."""
-        if not self._quantidade:
+        if not self._itens_do_pedido():
             self._passo = "QUANTIDADE"
             return ["Quantos?"]
         if self._endereco is None:
@@ -1385,17 +1431,24 @@ class Conversa:
     # --- cliente e transferência ---------------------------------------------------
 
     def _buscar_cliente_do_canal(self) -> list[dict] | None:
-        try:
-            resposta = self._d.api.buscar_clientes(self._telefone)
-        except TempoEsgotado:
-            return None
-        dados = resposta.dados if resposta.status == 200 else None
-        clientes = dados.get("data") if isinstance(dados, dict) else None
-        if not isinstance(clientes, list):
-            return None
-        if not all(isinstance(c, dict) and isinstance(c.get("id"), int) for c in clientes):
-            return None
-        return clientes
+        for numero in variantes_telefone(self._telefone):
+            try:
+                resposta = self._d.api.buscar_clientes(numero)
+            except TempoEsgotado:
+                return None
+            dados = resposta.dados if resposta.status == 200 else None
+            if not isinstance(dados, dict):
+                return None
+            clientes = dados.get("data")
+            if clientes is None and isinstance(dados.get("pagination"), dict) and dados["pagination"].get("count") == 0:
+                clientes = []
+            if not isinstance(clientes, list):
+                return None
+            if not all(isinstance(c, dict) and isinstance(c.get("id"), int) for c in clientes):
+                return None
+            if clientes:
+                return clientes
+        return []
 
     def _vazamento(self, texto: str) -> list[str]:
         self._passo = "ENCERRADA"
@@ -1477,8 +1530,18 @@ class Conversa:
         linhas.append(f"{len(self._formas) + 1}) Outra forma")
         return "Como vai pagar?\n" + "\n".join(linhas)
 
+    def _itens_do_pedido(self) -> tuple[Item, ...]:
+        if self._itens:
+            return tuple(self._itens)
+        if self._produto_id is not None and self._quantidade > 0:
+            return (Item(product_id=self._produto_id, quantidade=self._quantidade),)
+        return ()
+
     def _total(self) -> Decimal:
-        return self._d.catalogo[self._produto_id].preco * self._quantidade
+        return sum(
+            (self._d.catalogo[i.product_id].preco * i.quantidade for i in self._itens_do_pedido()),
+            Decimal("0"),
+        )
 
     def _resumo(self) -> str:
         return "\n".join(
@@ -1486,13 +1549,19 @@ class Conversa:
         )
 
     def _resumo_do_pedido(self) -> str:
-        produto = self._d.catalogo[self._produto_id]
+        itens = self._itens_do_pedido()
+        linhas_itens = [
+            f"{i.quantidade}x {self._d.catalogo[i.product_id].nome} — {reais(self._d.catalogo[i.product_id].preco * i.quantidade)}"
+            for i in itens
+        ]
+        if len(itens) > 1:
+            linhas_itens.append(f"Total: {reais(self._total())}")
         e = self._endereco
         return "\n".join(
             [
                 f"Nome: {self._nome}",
                 f"Telefone: {telefone_legivel(self._telefone)}",
-                f"{self._quantidade}x {produto.nome} — {reais(self._total())}",
+                *linhas_itens,
                 f"Entrega: {e.logradouro}, {e.numero} — {e.bairro}, {e.cidade}, {e.estado}",
                 *([f"Quadra: {e.quadra}"] if e.quadra else []),
                 *([f"Complemento: {e.complemento}"] if e.complemento else []),
@@ -1520,7 +1589,7 @@ class Conversa:
             pedido_id=self._pedido_id,
             telefone=self._telefone,
             nome=self._nome,
-            itens=(Item(product_id=self._produto_id, quantidade=self._quantidade),),
+            itens=self._itens_do_pedido(),
             endereco=self._endereco,
             pagamentos=(
                 Pagamento(

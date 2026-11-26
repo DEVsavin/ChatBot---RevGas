@@ -44,6 +44,16 @@ def marca_telefone(telefone: str) -> str:
     return f"[tel:{hashlib.sha256(normalizado.encode()).hexdigest()[:8]}]"
 
 
+def variantes_telefone(telefone: str) -> tuple[str, ...]:
+    """Devolve o telefone e a variante com/sem 9º dígito para busca no ERP."""
+    digitos = "".join(c for c in telefone if c.isdigit())
+    if len(digitos) == 13 and digitos.startswith("55") and digitos[4] == "9":
+        return (digitos, digitos[:4] + digitos[5:])
+    if len(digitos) == 12 and digitos.startswith("55"):
+        return (digitos, digitos[:4] + "9" + digitos[4:])
+    return (digitos or telefone,)
+
+
 def reais(valor: Decimal) -> str:
     """Formata no padrão brasileiro: Decimal("1200") -> "R$ 1.200,00"."""
     texto = f"{valor.quantize(CENTAVOS):,.2f}"  # "1,200.00"

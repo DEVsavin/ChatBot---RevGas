@@ -21,7 +21,7 @@ from revgas_chatbot.api_revgas.api_cadenciada import ApiCadenciada
 from revgas_chatbot.atendimento.atendimento import TransferirAtendente
 from revgas_chatbot.fuso import FUSO_TERESINA
 from revgas_chatbot.vendas.pedido import Endereco, ProdutoCatalogo
-from revgas_chatbot.vendas.venda import marca_telefone, reais
+from revgas_chatbot.vendas.venda import marca_telefone, reais, variantes_telefone
 
 MAXIMO_DE_PEDIDOS = 3
 MAXIMO_DE_PAGINAS = 20
@@ -159,15 +159,20 @@ class HistoricoDeVendas:
             return self._pedidos_de(
                 self._cliente_fixo, None, prazo_dias=prazo_dias, limite=limite, telefone=telefone
             )
-        try:
-            resposta = self._api.buscar_clientes(telefone)
-        except TempoEsgotado:
-            return TransferirAtendente("sem resposta da API ao buscar o cliente")
-        if resposta.status != 200:
-            return TransferirAtendente(f"erro HTTP {resposta.status} ao buscar o cliente")
-        clientes = _lista(resposta.dados)
-        if clientes is None or not all(_inteiro(c.get("id")) for c in clientes):
-            return TransferirAtendente("resposta inesperada da API ao buscar o cliente")
+        clientes: list[dict] = []
+        for numero in variantes_telefone(telefone):
+            try:
+                resposta = self._api.buscar_clientes(numero)
+            except TempoEsgotado:
+                return TransferirAtendente("sem resposta da API ao buscar o cliente")
+            if resposta.status != 200:
+                return TransferirAtendente(f"erro HTTP {resposta.status} ao buscar o cliente")
+            encontrados = _lista(resposta.dados)
+            if encontrados is None or not all(_inteiro(c.get("id")) for c in encontrados):
+                return TransferirAtendente("resposta inesperada da API ao buscar o cliente")
+            if encontrados:
+                clientes = encontrados
+                break
         if not clientes:
             return NenhumPedido()
         if len(clientes) > 1:

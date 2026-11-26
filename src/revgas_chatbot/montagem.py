@@ -84,8 +84,8 @@ def api_de_demonstracao(relogio: Relogio) -> ApiRevGasFalsa:
 
 
 AVISO_VENDA_REAL = (
-    "VENDA REAL LIGADA: cada pedido confirmado cria uma venda no estabelecimento "
-    f"{ESTABELECIMENTO} (cliente de demonstração, sem avisar entregadores)."
+    "VENDA REAL LIGADA: clientes e vendas reais no estabelecimento "
+    f"{ESTABELECIMENTO} (sem avisar entregadores)."
 )
 AVISO_ENTREGADORES = (
     "ATENÇÃO: cada pedido confirmado AVISA os entregadores do estabelecimento "
@@ -104,21 +104,18 @@ class ConfigVendaReal:
 
     url: str
     chave: str = field(repr=False)
-    cliente_demo: int  # REVGAS_CLIENTE_DEMO: o cliente fixo enquanto /customers der 403
+    cliente_demo: int | None = None  # opcional: se None, usa /v1/customers real
     avisar_entregadores: bool = False  # --avisar-entregadores: broadcast NEW_SALE
 
 
 def config_venda_real(ambiente: Mapping[str, str]) -> ConfigVendaReal:
-    valores = {n: (ambiente.get(n) or "").strip() for n in ("REVGAS_API_KEY", "REVGAS_API_URL", "REVGAS_CLIENTE_DEMO")}
+    valores = {n: (ambiente.get(n) or "").strip() for n in ("REVGAS_API_KEY", "REVGAS_API_URL")}
     faltam = [nome for nome, valor in valores.items() if not valor]
     if faltam:
         raise ConfiguracaoInvalida("faltam no .env: " + ", ".join(faltam))
     if not valores["REVGAS_API_URL"].startswith("https://"):
         raise ConfiguracaoInvalida("REVGAS_API_URL precisa começar com https://")
-    cliente = valores["REVGAS_CLIENTE_DEMO"]
-    if not cliente.isdigit() or int(cliente) <= 0:
-        raise ConfiguracaoInvalida("REVGAS_CLIENTE_DEMO: o número do cliente de demonstração, ex.: 5700355")
-    return ConfigVendaReal(url=valores["REVGAS_API_URL"], chave=valores["REVGAS_API_KEY"], cliente_demo=int(cliente))
+    return ConfigVendaReal(url=valores["REVGAS_API_URL"], chave=valores["REVGAS_API_KEY"], cliente_demo=None)
 
 
 def numeros_da_equipe(ambiente: Mapping[str, str]) -> tuple[str, ...]:
@@ -162,8 +159,7 @@ class Programa:
     monitor_api: MonitorApi = field(default_factory=MonitorApi)
 
     def __call__(self, telefone: str, *, numero_confiavel: bool = True) -> Conversa:
-        """Venda real: o número nunca busca cadastro (`/customers` dá 403)."""
-        return Conversa(telefone, self.dependencias, numero_confiavel=numero_confiavel and not self.venda_real)
+        return Conversa(telefone, self.dependencias, numero_confiavel=numero_confiavel)
 
 
 def montar(

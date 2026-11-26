@@ -58,7 +58,7 @@ O **Chatbot RevGás** automatiza o atendimento aos clientes das revendas de GLP.
 <td width="50%" valign="top">
 
 ### 🛒 Pedido rápido, uma pergunta por vez
-Captura automática do telefone do cliente, catálogo real de GLP e reguladores, endereço com **Quadra** opcional e cidade/estado automáticos (`Teresina, Piauí`), botão `0) Não tem / Pular etapa`, pagamento em **PIX** (*Pagar agora* ou *Pagar na entrega*), **Dinheiro** (com troco), **Cartão** (débito/crédito) e **Vale-gás** (código de 7 dígitos).
+Captura automática do telefone do cliente, identificação/cadastro automático no ERP, catálogo real de GLP e reguladores com **múltiplos itens no mesmo pedido**, endereço com **Quadra** opcional e cidade/estado automáticos (`Teresina, Piauí`), botão `0) Não tem / Pular etapa`, pagamento em **PIX** (*Pagar agora* ou *Pagar na entrega*), **Dinheiro** (com troco), **Cartão** (débito/crédito) e **Vale-gás** (código de 7 dígitos com troca rápida de pagamento se inválido).
 
 </td>
 <td width="50%" valign="top">
@@ -90,11 +90,15 @@ No modo `--venda-real`, todas as operações consomem diretamente a API oficial 
 
 | Método | Endpoint | Uso no Chatbot |
 |---|---|---|
+| `GET` | `/v1/customers` | Identifica cliente real pelo telefone (com fallback automático de 9º dígito), trazendo nome, endereço e coordenadas |
+| `POST` | `/v1/customers` | Cadastra automaticamente cliente novo ao confirmar o primeiro pedido |
+| `GET` | `/v1/customers/{id}` | Detalha cadastro de um cliente específico |
+| `PUT` | `/v1/customers/{id}` | Atualiza automaticamente endereço/nome do cliente no ERP quando alterado no pedido |
 | `GET` | `/v1/products` | Carrega os produtos ativos em estoque do estabelecimento (filtrados para GLP, botijões, vasilhames, reguladores e mangueiras) |
 | `GET` | `/v1/deals` | Busca os preços vigentes de tabela para montar o catálogo real |
 | `GET` | `/v1/sales` | Consulta o histórico recente de pedidos do cliente (`meus pedidos`, `status`, repetir último pedido e devolução/cancelamento) |
 | `GET` | `/v1/sales/{id}` | Busca os detalhes atualizados de um pedido específico (status, entregador, previsão, forma de pagamento) |
-| `POST` | `/v1/sales` | Registra a venda confirmada pelo cliente no ERP RevGás |
+| `POST` | `/v1/sales` | Registra a venda confirmada (incluindo múltiplos itens em `products[]`) no ERP RevGás |
 | `PUT` | `/v1/sales/{id}` | Registra solicitações de cancelamento, troca/problema ou devolução diretamente na `observation` da venda (protocolo `ERP-{id}`) |
 
 ## 🧭 Como funciona

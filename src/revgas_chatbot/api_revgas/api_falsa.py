@@ -30,7 +30,9 @@ TIMEOUT_DEPOIS_DE_CRIAR = "timeout_depois_de_criar"  # o servidor criou, a respo
 OPERACOES = frozenset(
     {
         "buscar_clientes",
+        "buscar_cliente",
         "cadastrar_cliente",
+        "atualizar_cliente",
         "criar_venda",
         "buscar_vendas",
         "buscar_venda",
@@ -122,8 +124,14 @@ class ApiRevGasFalsa:
     def buscar_clientes(self, telefone: str) -> Resposta:
         return self._executar("buscar_clientes", lambda: self._buscar_clientes(telefone))
 
+    def buscar_cliente(self, cliente_id: int) -> Resposta:
+        return self._executar("buscar_cliente", lambda: self._buscar_cliente(cliente_id))
+
     def cadastrar_cliente(self, dados: dict[str, Any]) -> Resposta:
         return self._executar("cadastrar_cliente", lambda: self._cadastrar_cliente(dados))
+
+    def atualizar_cliente(self, cliente_id: int, dados: dict[str, Any]) -> Resposta:
+        return self._executar("atualizar_cliente", lambda: self._atualizar_cliente(cliente_id, dados))
 
     def criar_venda(self, corpo: dict[str, Any]) -> Resposta:
         return self._executar("criar_venda", lambda: self._criar_venda(corpo))
@@ -197,10 +205,23 @@ class ApiRevGasFalsa:
         achados = [c for c in self.clientes if telefone in c.get("phones", [])]
         return Resposta(200, {"data": achados, "pagination": {"has_next": False}})
 
+    def _buscar_cliente(self, cliente_id: int) -> Resposta:
+        for cliente in self.clientes:
+            if cliente["id"] == cliente_id:
+                return Resposta(200, dict(cliente))
+        return Resposta(404, {"message": "Cliente não encontrado."})
+
     def _cadastrar_cliente(self, dados: dict[str, Any]) -> Resposta:
         cliente = {**dados, "id": self._novo_id()}
         self.clientes.append(cliente)
         return Resposta(201, cliente)
+
+    def _atualizar_cliente(self, cliente_id: int, dados: dict[str, Any]) -> Resposta:
+        for cliente in self.clientes:
+            if cliente["id"] == cliente_id:
+                cliente.update(dados)
+                return Resposta(200, dict(cliente))
+        return Resposta(404, {"message": "Cliente não encontrado."})
 
     def _criar_venda(self, corpo: dict[str, Any]) -> Resposta:
         total = sum((Decimal(str(p["value"])) * p["quantity"] for p in corpo["products"]), Decimal("0"))

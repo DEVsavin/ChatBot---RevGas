@@ -92,7 +92,7 @@ def criar_app(programa: Programa, *, porta: int = PORTA, pasta_dados: Path = Pat
         if numero is None:
             return _erro(400, "Número inválido. Use DDD e número, ex.: (00) 90000-0001.")
         ficticio = numero_ficticio(numero)
-        conversa = programa(numero, numero_confiavel=ficticio)
+        conversa = programa(numero, numero_confiavel=ficticio or programa.venda_real)
         sessao = secrets.token_urlsafe(24)  # 192 bits aleatórios: não dá para adivinhar
         sessoes[sessao] = {"conversa": conversa, "iniciada": False}
         avisos = [AVISO_VENDA_REAL] if programa.venda_real else []
